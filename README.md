@@ -212,12 +212,33 @@ used by both Learn and Quiz:
 
 ## Learn mode
 
-`mastery_count` starts at 0, `+1` for each correct answer, resets to **0** on a miss.
-A question is mastered at **2**, so it must be answered correctly twice.
+A rolling active pool rather than a shuffled deck, in the spirit of Quizlet Learn.
 
-A missed question is reinserted **3–7 questions later**, never immediately. The opening queue
-is ordered last-answer-wrong → unseen → learning, shuffled within each tier. A deck that is
-already fully mastered still builds a session, so "Study again" always works.
+About **seven questions** are in play at any moment. Each question sits at one of four
+levels — **New, Learning, Familiar, Mastered**. A correct answer moves it up one
+(`0→1→2→3`); a miss steps it *down* (`3→1`, `2→1`, `1→0`) rather than wiping it, so one
+slip on something you know well does not send it back to the start.
+
+Spacing widens as a question gets easier, so effort goes where it is needed:
+
+| After | Comes back in |
+|---|---|
+| a wrong answer | 2–4 questions |
+| reaching Learning | 4–7 questions |
+| reaching Familiar | 7–12 questions |
+| reaching Mastered | leaves the pool |
+
+Attention is ordered **wrong/weak → Learning → Familiar → New → Mastered**, with ties broken
+randomly so the same run does not repeat in the same order. Nothing is ever shown twice in a
+row while another question is available.
+
+When a question is mastered it leaves the pool and a new one takes its place, so the deck is
+introduced gradually instead of all at once. The session ends when every question reaches
+Mastered — three correct answers minimum, and more if you slip.
+
+A **checkpoint** appears every 5–10 newly mastered questions (adjustable, and remembered)
+showing the level breakdown and overall progress. It is a pause, not an interruption: normal
+question-to-question transitions stay fast.
 
 `/decks/[id]/learn?ids=a,b,c` studies just those questions — that is what "Review missed" and
 "Study missed questions" link to.

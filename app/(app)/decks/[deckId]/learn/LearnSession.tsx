@@ -4,45 +4,34 @@ import Link from "next/link";
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MCQOption, OPTION_LABELS, type OptionState } from "@/components/MCQOption";
+import { Mascot, type MascotState } from "@/components/Mascot";
 import { RangeSlider } from "@/components/RangeSlider";
-import { Button, ButtonLink, Card, MasteryBreakdown, ProgressBar, Stat, cn } from "@/components/ui";
+import { Button, ButtonLink, Card, ProgressBar, Stat, cn } from "@/components/ui";
 import { recordAnswer } from "@/lib/actions/study";
 import { generateChoices, maxAvailableChoices, type Choice } from "@/lib/distractors";
 import {
-  DEFAULT_ROUND_RANGE,
-  MASTERY_TARGET,
-  ROUND_LIMITS,
+  CHECKPOINT_LIMITS,
+  DEFAULT_CHECKPOINT_RANGE,
+  MASTERY_MASTERED,
   applyAnswer,
+  countsFor,
   createLearnState,
   isComplete,
-  nextRoundSize,
-  pickRoundQuestions,
-  remainingCount,
+  withCheckpointRange,
+  type CheckpointRange,
+  type Counts,
   type LearnState,
-  type RoundRange,
 } from "@/lib/learnAlgorithm";
 import type { StudyQuestion } from "@/lib/types";
 
-/** Keyboard shortcuts for the first four options. */
 const KEY_TO_INDEX: Record<string, number | undefined> = {
   "1": 0, "2": 1, "3": 2, "4": 3,
   a: 0, b: 1, c: 2, d: 3,
 };
 
 const AUTO_ADVANCE_MS = 700;
-const RANGE_STORAGE_KEY = "memorizer-round-range";
-
-type Stage = "round" | "checkin" | "done";
-
-type Totals = {
-  answered: number;
-  correct: number;
-  bestStreak: number;
-  missed: string[];
-  seen: string[];
-};
-
-const EMPTY_TOTALS: Totals = { answered: 0, correct: 0, bestStreak: 0, missed: [], seen: [] };
+const CELEBRATION_STREAK = 5;
+const RANGE_STORAGE_KEY = "memorizer-checkpoint-range";
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -50,21 +39,31 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
 }
 
-function readStoredRange(): RoundRange | null {
+function readStoredRange(): CheckpointRange | null {
   try {
     const raw = localStorage.getItem(RANGE_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<RoundRange>;
+    const parsed = JSON.parse(raw) as Partial<CheckpointRange>;
     if (typeof parsed.min !== "number" || typeof parsed.max !== "number") return null;
-    const min = Math.min(Math.max(parsed.min, ROUND_LIMITS.min), ROUND_LIMITS.max);
-    const max = Math.min(Math.max(parsed.max, min), ROUND_LIMITS.max);
+    const min = Math.min(Math.max(parsed.min, CHECKPOINT_LIMITS.min), CHECKPOINT_LIMITS.max);
+    const max = Math.min(Math.max(parsed.max, min), CHECKPOINT_LIMITS.max);
     return { min, max };
   } catch {
     return null;
   }
 }
 
-const unique = (ids: readonly string[]) => [...new Set(ids)];
+/** Small coloured tally of how the deck is spread across the four levels. */
+function LevelCounts({ counts }: { counts: Counts }) {
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+      <span className="text-success tabular-nums">{counts.mastered} mastered</span>
+      <span className="text-accent tabular-nums">{counts.familiar} familiar</span>
+      <span className="text-ink tabular-nums">{counts.learning} learning</span>
+      <span className="text-muted tabular-nums">{counts.new} new</span>
+    </div>
+  );
+}
 
 export function LearnSession({
   deckId,
@@ -78,37 +77,33 @@ export function LearnSession({
   const byId = useMemo(() => new Map(questions.map((q) => [q.id, q])), [questions]);
 
   const [ready, setReady] = useState(false);
-  /** React re-runs mount effects in development; building the session twice
-   *  would discard the first round and start the learner on "Round 2". */
   const startedRef = useRef(false);
-  const [stage, setStage] = useState<Stage>("round");
-  const [showRoundSettings, setShowRoundSettings] = useState(false);
-  const [range, setRange] = useState<RoundRange>(DEFAULT_ROUND_RANGE);
-
-  /** Mastery carried between rounds, seeded from what the database already knows. */
-  const [sessionMastery, setSessionMastery] = useState<Record<string, number>>(() => {
-    const seed: Record<string, number> = {};
-    for (const q of questions) {
-      seed[q.id] = Math.min(q.progress?.mastery_count ?? 0, MASTERY_TARGET - 1);
-    }
-    return seed;
-  });
-
-  const [roundQuestions, setRoundQuestions] = useState<StudyQuestion[]>([]);
-  const [roundNumber, setRoundNumber] = useState(0);
+  const [range, setRange] = useState<CheckpointRange>(DEFAULT_CHECKPOINT_RANGE);
   const [state, setState] = useState<LearnState | null>(null);
-  const [totals, setTotals] = useState<Totals>(EMPTY_TOTALS);
 
-  const [phase, setPhase] = useState<"answering" | "feedback">("answering");
+  const [phase, setPhase] = useState<"answering" | "feedback" | "checkpoint" | "done">("answering");
   const [selected, setSelected] = useState<string | null>(null);
   const [wasCorrect, setWasCorrect] = useState<boolean | null>(null);
   const [presentation, setPresentation] = useState(0);
   const [presented, setPresented] = useState<{ key: string; choices: Choice[] } | null>(null);
   const [saveFailedFor, setSaveFailedFor] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  /** Counts captured when a checkpoint fired, so the panel is a snapshot. */
+  const [checkpointCounts, setCheckpointCounts] = useState<Counts | null>(null);
 
-  // Round selection shuffles, so nothing may run during render. The stored
-  // round-length preference is read here too, for the same reason.
-  const currentId = state?.queue[0];
+  // The opening pool is shuffled within tiers, so it has to be built after
+  // mount or the server and the client would disagree on the first question.
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    const saved = readStoredRange();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (saved) setRange(saved);
+    setState(createLearnState(questions, saved ?? DEFAULT_CHECKPOINT_RANGE));
+    setReady(true);
+  }, [questions]);
+
+  const currentId = state?.current ?? null;
   const question = currentId ? byId.get(currentId) ?? null : null;
   const presentationKey = `${presentation}:${currentId ?? ""}`;
 
@@ -120,96 +115,28 @@ export function LearnSession({
 
   const choices = presented && presented.key === presentationKey ? presented.choices : null;
 
-  /** Deck-wide mastery: what earlier rounds settled, overlaid with this round. */
-  const liveMastery = useMemo(
-    () => ({ ...sessionMastery, ...(state?.mastery ?? {}) }),
-    [sessionMastery, state],
+  const counts = useMemo(
+    () =>
+      state
+        ? countsFor(state, questions)
+        : { new: questions.length, learning: 0, familiar: 0, mastered: 0, total: questions.length },
+    [state, questions],
   );
-
-  const overall = useMemo(() => {
-    const seen = new Set([...totals.seen, ...(state?.seen ?? [])]);
-    let mastered = 0;
-    let learning = 0;
-    let unseen = 0;
-    for (const q of questions) {
-      const level = liveMastery[q.id] ?? 0;
-      if (level >= MASTERY_TARGET) mastered += 1;
-      else if (level > 0 || seen.has(q.id) || (q.progress?.times_seen ?? 0) > 0) learning += 1;
-      else unseen += 1;
-    }
-    return { mastered, learning, unseen, total: questions.length };
-  }, [questions, liveMastery, totals.seen, state]);
-
-  const remaining = remainingCount(questions, liveMastery);
 
   const available = useMemo(
     () => (question ? maxAvailableChoices(question, questions) : 4),
     [question, questions],
   );
 
-  const beginRound = useCallback(
-    (
-      mastery: Record<string, number>,
-      carriedStreak: number,
-      carriedBest: number,
-      useRange: RoundRange = range,
-    ) => {
-      const left = remainingCount(questions, mastery);
-      if (left === 0) {
-        setStage("done");
-        return;
-      }
-      const size = nextRoundSize(useRange, left);
-      const picked = pickRoundQuestions(questions, mastery, size);
-      const next = createLearnState(picked, mastery);
-      next.streak = carriedStreak;
-      next.bestStreak = carriedBest;
-
-      setRoundQuestions(picked);
-      setState(next);
-      setRoundNumber((n) => n + 1);
-      setPhase("answering");
-      setSelected(null);
-      setWasCorrect(null);
-      setSaveFailedFor(null);
-      setPresentation((n) => n + 1);
-      setStage("round");
-    },
-    [questions, range],
-  );
-
-  // Learn opens straight into the first round — no settings gate. The round
-  // length is remembered from last time and adjustable at any check-in.
-  useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-
-    const saved = readStoredRange();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (saved) setRange(saved);
-    setReady(true);
-    beginRound(sessionMastery, 0, 0, saved ?? DEFAULT_ROUND_RANGE);
-    // Mount only: re-running this would restart the session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const updateRange = useCallback((next: RoundRange) => {
+  const updateRange = useCallback((next: CheckpointRange) => {
     setRange(next);
+    setState((previous) => (previous ? withCheckpointRange(previous, next) : previous));
     try {
       localStorage.setItem(RANGE_STORAGE_KEY, JSON.stringify(next));
     } catch {
       // Preference just will not persist.
     }
   }, []);
-
-  const restartAll = useCallback(() => {
-    const seed: Record<string, number> = {};
-    for (const q of questions) seed[q.id] = 0;
-    setSessionMastery(seed);
-    setTotals(EMPTY_TOTALS);
-    setRoundNumber(0);
-    beginRound(seed, 0, 0);
-  }, [questions, beginRound]);
 
   const grade = useCallback(
     (choice: Choice) => {
@@ -231,41 +158,41 @@ export function LearnSession({
 
   const advance = useCallback(() => {
     if (phase !== "feedback" || !question || wasCorrect === null || !state) return;
-    const next = applyAnswer(state, question.id, wasCorrect);
+    const outcome = applyAnswer(state, question.id, wasCorrect);
+    setState(outcome.state);
 
-    if (isComplete(next)) {
-      // Fold the round into the session, then stop for a check-in.
-      const merged = { ...sessionMastery, ...next.mastery };
-      setSessionMastery(merged);
-      setTotals((t) => ({
-        answered: t.answered + next.answered,
-        correct: t.correct + next.correct,
-        bestStreak: Math.max(t.bestStreak, next.bestStreak),
-        missed: unique([...t.missed, ...next.missed]),
-        seen: unique([...t.seen, ...next.seen]),
-      }));
-      setState(next);
-      setStage(remainingCount(questions, merged) === 0 ? "done" : "checkin");
+    if (isComplete(outcome.state)) {
+      setPhase("done");
+    } else if (outcome.checkpoint) {
+      setCheckpointCounts(countsFor(outcome.state, questions));
+      setPhase("checkpoint");
     } else {
-      setState(next);
+      setPhase("answering");
     }
 
     setPresentation((n) => n + 1);
     setSelected(null);
     setWasCorrect(null);
-    setPhase("answering");
     setSaveFailedFor(null);
-  }, [phase, question, wasCorrect, state, sessionMastery, questions]);
+  }, [phase, question, wasCorrect, state, questions]);
+
+  const restart = useCallback(() => {
+    setState(createLearnState(questions, range));
+    setPhase("answering");
+    setSelected(null);
+    setWasCorrect(null);
+    setCheckpointCounts(null);
+    setPresentation((n) => n + 1);
+  }, [questions, range]);
 
   // A correct answer with nothing to read moves on by itself. Misses wait.
   useEffect(() => {
-    if (stage !== "round" || phase !== "feedback" || wasCorrect !== true || question?.explanation) return;
+    if (phase !== "feedback" || wasCorrect !== true || question?.explanation) return;
     const timer = setTimeout(advance, AUTO_ADVANCE_MS);
     return () => clearTimeout(timer);
-  }, [stage, phase, wasCorrect, question, advance]);
+  }, [phase, wasCorrect, question, advance]);
 
   useEffect(() => {
-    if (stage !== "round") return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (isTypingTarget(event.target)) return;
@@ -277,6 +204,7 @@ export function LearnSession({
         }
         return;
       }
+      if (phase !== "answering") return;
 
       const index = KEY_TO_INDEX[event.key.toLowerCase()];
       if (index === undefined) return;
@@ -288,7 +216,7 @@ export function LearnSession({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [stage, phase, choices, advance, grade]);
+  }, [phase, choices, advance, grade]);
 
   const breadcrumb = (
     <div className="flex items-center justify-between gap-3">
@@ -305,12 +233,10 @@ export function LearnSession({
     </div>
   );
 
-  const sessionAccuracy = (answered: number, correct: number) =>
+  const accuracy = (answered: number, correct: number) =>
     answered > 0 ? Math.round((correct / answered) * 100) : 0;
 
-  // ---------------------------------------------------------------- setup ---
-
-  if (!ready) {
+  if (!ready || !state) {
     return (
       <div className="space-y-6">
         {breadcrumb}
@@ -323,30 +249,32 @@ export function LearnSession({
 
   // ------------------------------------------------------------- finished ---
 
-  if (stage === "done") {
+  if (phase === "done") {
     return (
       <div className="space-y-6">
         {breadcrumb}
         <Card className="space-y-6 py-10 text-center">
+          <div className="flex justify-center">
+            <Mascot state="complete" size="lg" replayKey="done" />
+          </div>
           <div className="space-y-2">
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Deck Mastered</h1>
-            <p className="text-success tabular-nums">
-              {overall.total} / {overall.total} mastered
+            <p className="tabular-nums text-success">
+              {counts.total} / {counts.total} mastered
             </p>
           </div>
           <div className="flex flex-wrap justify-center gap-x-8 gap-y-3">
-            <Stat label="Accuracy" value={`${sessionAccuracy(totals.answered, totals.correct)}%`} />
-            <Stat label="Questions answered" value={totals.answered} tone="muted" />
-            <Stat label="Best streak" value={totals.bestStreak} tone="accent" />
-            <Stat label="Rounds" value={roundNumber} tone="muted" />
+            <Stat label="Accuracy" value={`${accuracy(state.answered, state.correct)}%`} />
+            <Stat label="Questions answered" value={state.answered} tone="muted" />
+            <Stat label="Best streak" value={state.bestStreak} tone="accent" />
           </div>
           <div className="flex flex-wrap justify-center gap-2">
-            {totals.missed.length > 0 ? (
-              <ButtonLink href={`/decks/${deckId}/learn?ids=${totals.missed.join(",")}`}>
+            {state.missed.length > 0 ? (
+              <ButtonLink href={`/decks/${deckId}/learn?ids=${state.missed.join(",")}`}>
                 Review Missed
               </ButtonLink>
             ) : null}
-            <Button variant="secondary" onClick={restartAll}>
+            <Button variant="secondary" onClick={restart}>
               Study Again
             </Button>
             <ButtonLink href={`/decks/${deckId}/quiz`} variant="secondary">
@@ -361,63 +289,38 @@ export function LearnSession({
     );
   }
 
-  // ------------------------------------------------------------- check-in ---
+  // ----------------------------------------------------------- checkpoint ---
 
-  if (stage === "checkin" && state) {
-    const roundMastered = roundQuestions.filter(
-      (q) => (state.mastery[q.id] ?? 0) >= MASTERY_TARGET,
-    ).length;
-
+  if (phase === "checkpoint" && checkpointCounts) {
     return (
       <div className="space-y-6">
         {breadcrumb}
         <Card className="space-y-6 py-8 text-center">
-          <div className="space-y-2">
+          <div className="flex justify-center">
+            <Mascot state="checkpoint" size="lg" replayKey={checkpointCounts.mastered} />
+          </div>
+          <div className="space-y-1">
             <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
-              Round {roundNumber} complete
+              {checkpointCounts.mastered} mastered
             </h1>
             <p className="text-sm text-muted">
-              {roundMastered} of {roundQuestions.length} mastered this round ·{" "}
-              {sessionAccuracy(state.answered, state.correct)}% accuracy
+              {accuracy(state.answered, state.correct)}% accuracy over {state.answered} answers
             </p>
           </div>
 
           <div className="flex flex-wrap justify-center gap-x-8 gap-y-3">
-            <Stat label="Answered this round" value={state.answered} tone="muted" />
-            <Stat label="Best streak" value={Math.max(totals.bestStreak, state.bestStreak)} tone="accent" />
-            <Stat label="Left in the deck" value={remaining} tone="muted" />
+            <Stat label="Mastered" value={checkpointCounts.mastered} tone="success" />
+            <Stat label="Familiar" value={checkpointCounts.familiar} tone="accent" />
+            <Stat label="Learning" value={checkpointCounts.learning} />
+            <Stat label="Remaining" value={checkpointCounts.new} tone="muted" />
           </div>
 
-          <div className="space-y-2 text-left">
-            <ProgressBar value={overall.mastered} total={overall.total} />
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <MasteryBreakdown
-                mastered={overall.mastered}
-                learning={overall.learning}
-                unseen={overall.unseen}
-              />
-              <span className="text-sm tabular-nums text-muted">
-                {overall.mastered} / {overall.total} mastered
-              </span>
-            </div>
-          </div>
+          <ProgressBar value={checkpointCounts.mastered} total={checkpointCounts.total} />
 
           <div className="flex flex-wrap justify-center gap-2">
-            <Button
-              size="lg"
-              autoFocus
-              onClick={() => beginRound(sessionMastery, state.streak, Math.max(totals.bestStreak, state.bestStreak))}
-            >
-              Next round
+            <Button size="lg" autoFocus onClick={() => setPhase("answering")}>
+              Keep going
             </Button>
-            {state.missed.length > 0 ? (
-              <ButtonLink
-                href={`/decks/${deckId}/learn?ids=${state.missed.join(",")}`}
-                variant="secondary"
-              >
-                Review this round&rsquo;s misses
-              </ButtonLink>
-            ) : null}
             <ButtonLink href={`/decks/${deckId}`} variant="ghost">
               Finish for now
             </ButtonLink>
@@ -426,34 +329,30 @@ export function LearnSession({
           <div className="border-t border-line pt-4 text-left">
             <button
               type="button"
-              onClick={() => setShowRoundSettings((v) => !v)}
-              aria-expanded={showRoundSettings}
+              onClick={() => setShowSettings((v) => !v)}
+              aria-expanded={showSettings}
               className="flex w-full items-center justify-between gap-3 text-sm text-muted transition-colors hover:text-ink"
             >
               <span>
-                Round length ·{" "}
+                Checkpoint every{" "}
                 <span className="tabular-nums">
                   {range.min}–{range.max}
                 </span>{" "}
-                questions
+                mastered
               </span>
               <span aria-hidden className="text-xs">
-                {showRoundSettings ? "Hide" : "Change"}
+                {showSettings ? "Hide" : "Change"}
               </span>
             </button>
-
-            {showRoundSettings ? (
+            {showSettings ? (
               <div className="mt-4">
                 <RangeSlider
-                  label="Questions per round"
-                  min={ROUND_LIMITS.min}
-                  max={ROUND_LIMITS.max}
+                  label="Questions mastered between checkpoints"
+                  min={CHECKPOINT_LIMITS.min}
+                  max={CHECKPOINT_LIMITS.max}
                   value={range}
                   onChange={updateRange}
                 />
-                <p className="mt-3 text-xs text-muted">
-                  Each round picks a random length inside this range. Applies from the next round.
-                </p>
               </div>
             ) : null}
           </div>
@@ -464,9 +363,7 @@ export function LearnSession({
     );
   }
 
-  // ---------------------------------------------------------------- round ---
-
-  if (!state || !question) {
+  if (!question) {
     return (
       <div className="space-y-6">
         {breadcrumb}
@@ -474,7 +371,7 @@ export function LearnSession({
           <p className="font-medium">This session could not be continued</p>
           <p className="text-sm text-muted">The next question is no longer available.</p>
           <div className="flex flex-wrap justify-center gap-2">
-            <Button variant="secondary" onClick={restartAll}>
+            <Button variant="secondary" onClick={restart}>
               Study Again
             </Button>
             <ButtonLink href={`/decks/${deckId}`} variant="ghost">
@@ -493,11 +390,16 @@ export function LearnSession({
     return "idle";
   };
 
-  // A question stays in the round until it is mastered, so "done" here means
-  // mastered this round, not merely answered.
-  const roundMastered = roundQuestions.filter(
-    (q) => (state.mastery[q.id] ?? 0) >= MASTERY_TARGET,
-  ).length;
+  const mascotState: MascotState =
+    phase !== "feedback"
+      ? "idle"
+      : wasCorrect
+        ? state.streak >= CELEBRATION_STREAK
+          ? "celebrate"
+          : "correct"
+        : "wrong";
+
+  const level = state.states[question.id]?.mastery ?? 0;
 
   return (
     <div className="space-y-6">
@@ -505,33 +407,27 @@ export function LearnSession({
 
       <div className="sticky top-14 z-10 -mx-4 space-y-2 border-b border-line bg-bg px-4 pb-3 pt-2">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          <MasteryBreakdown
-            mastered={overall.mastered}
-            learning={overall.learning}
-            unseen={overall.unseen}
-          />
-          <span
-            className={cn(
-              "rounded-md border px-2 py-0.5 text-xs font-medium tabular-nums transition-colors",
-              state.streak >= 3 ? "tint-accent text-ink" : "border-line text-muted",
-            )}
-            aria-label={`Current streak: ${state.streak} correct in a row`}
-          >
-            Streak {state.streak}
-            {state.bestStreak > state.streak ? (
-              <span className="text-muted"> · best {state.bestStreak}</span>
-            ) : null}
-          </span>
+          <LevelCounts counts={counts} />
+          <div className="flex items-center gap-2">
+            <Mascot state={mascotState} size="sm" replayKey={state.answered} />
+            <span
+              className={cn(
+                "rounded-md border px-2 py-0.5 text-xs font-medium tabular-nums transition-colors",
+                state.streak >= 3 ? "tint-accent text-ink" : "border-line text-muted",
+              )}
+              aria-label={`Current streak: ${state.streak} correct in a row`}
+            >
+              Streak {state.streak}
+              {state.bestStreak > state.streak ? (
+                <span className="text-muted"> · best {state.bestStreak}</span>
+              ) : null}
+            </span>
+          </div>
         </div>
-        <ProgressBar value={overall.mastered} total={overall.total} />
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          <p className="text-sm tabular-nums text-muted">
-            {overall.mastered} / {overall.total} mastered
-          </p>
-          <p className="text-xs tabular-nums text-muted">
-            Round {roundNumber} · {roundMastered}/{roundQuestions.length} mastered
-          </p>
-        </div>
+        <ProgressBar value={counts.mastered} total={counts.total} />
+        <p className="text-sm tabular-nums text-muted">
+          {counts.mastered} / {counts.total} mastered
+        </p>
       </div>
 
       <div className="space-y-5">
@@ -539,7 +435,9 @@ export function LearnSession({
           <h2 className="text-xl font-medium leading-snug sm:text-2xl">{question.question_text}</h2>
           <p className="text-xs text-muted">
             {question.topic ? `${question.topic} · ` : ""}
-            Answer correctly {MASTERY_TARGET} times to master a question.
+            {level === 0
+              ? "New question"
+              : `${MASTERY_MASTERED - level} more correct to master`}
           </p>
           {available < 4 ? (
             <p className="text-xs text-muted">
@@ -569,7 +467,7 @@ export function LearnSession({
                   {wasCorrect ? "Correct" : "Incorrect"}
                 </p>
                 {wasCorrect && state.streak >= 2 ? (
-                  <p className="text-xs text-muted tabular-nums">{state.streak} in a row</p>
+                  <p className="text-xs tabular-nums text-muted">{state.streak} in a row</p>
                 ) : null}
               </div>
 

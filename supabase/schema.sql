@@ -110,7 +110,7 @@ create index if not exists answer_choices_question_id_idx on answer_choices (que
 
 -- ---------------------------------------------------------------------------
 -- question_progress
--- mastery_count: 0 = not yet correct, 1 = learning, 2+ = mastered.
+-- mastery_count: 0 = New, 1 = Learning, 2 = Familiar, 3 = Mastered.
 -- Scoped per profile so each friend has their own mastery.
 -- ---------------------------------------------------------------------------
 create table if not exists question_progress (
@@ -172,7 +172,7 @@ create index if not exists quiz_answers_attempt_idx on quiz_answers (quiz_attemp
 -- One round trip for every deck's mastery breakdown and accuracy.
 --   unseen   = never answered
 --   learning = answered at least once but not yet mastered
---   mastered = mastery_count >= 2
+--   mastered = mastery_count >= 3
 -- A question missed after being mastered drops back to learning, not unseen.
 -- ---------------------------------------------------------------------------
 create or replace function deck_stats(p_profile_id uuid)
@@ -192,12 +192,12 @@ as $$
     d.id as deck_id,
     count(q.id) as total_questions,
     count(*) filter (
-      where q.id is not null and coalesce(qp.mastery_count, 0) >= 2
+      where q.id is not null and coalesce(qp.mastery_count, 0) >= 3
     ) as mastered,
     count(*) filter (
       where q.id is not null
         and coalesce(qp.times_seen, 0) > 0
-        and coalesce(qp.mastery_count, 0) < 2
+        and coalesce(qp.mastery_count, 0) < 3
     ) as learning,
     count(*) filter (
       where q.id is not null and coalesce(qp.times_seen, 0) = 0
@@ -230,7 +230,7 @@ as $$
   select
     coalesce(nullif(trim(q.topic), ''), 'Untagged') as topic,
     count(q.id) as total,
-    count(*) filter (where coalesce(qp.mastery_count, 0) >= 2) as mastered,
+    count(*) filter (where coalesce(qp.mastery_count, 0) >= 3) as mastered,
     coalesce(sum(coalesce(qp.times_correct, 0) + coalesce(qp.times_incorrect, 0)), 0) as total_answers,
     coalesce(sum(coalesce(qp.times_correct, 0)), 0) as total_correct
   from questions q
@@ -247,10 +247,12 @@ $$;
 -- Atomic upsert of a single answer. Doing this in SQL rather than
 -- read-modify-write in the app keeps two people studying at once from
 -- clobbering each other's counters.
---   correct   -> mastery_count + 1
---   incorrect -> mastery_count resets to 0
--- Both Learn and Quiz use this, so the two modes agree on what "mastered"
--- and "missed" mean.
+-- Mastery ladder, matching lib/learnAlgorithm.ts:
+--   correct   -> 0->1->2->3, capped at 3 (Mastered)
+--   incorrect -> 3->1, 2->1, 1->0, 0->0
+-- A miss costs progress without wiping it, so one slip on a well-known
+-- question does not send it back to the start. Both Learn and Quiz use this,
+-- so the two modes agree on what "mastered" and "missed" mean.
 -- ---------------------------------------------------------------------------
 create or replace function record_answer(
   p_profile_id  uuid,
@@ -278,7 +280,11 @@ as $$
     times_seen      = question_progress.times_seen + 1,
     times_correct   = question_progress.times_correct + case when p_correct then 1 else 0 end,
     times_incorrect = question_progress.times_incorrect + case when p_correct then 0 else 1 end,
-    mastery_count   = case when p_correct then question_progress.mastery_count + 1 else 0 end,
+    mastery_count   = case
+                        when p_correct then least(question_progress.mastery_count + 1, 3)
+                        when question_progress.mastery_count >= 2 then 1
+                        else 0
+                      end,
     last_seen_at    = now(),
     last_result     = p_correct,
     updated_at      = now();

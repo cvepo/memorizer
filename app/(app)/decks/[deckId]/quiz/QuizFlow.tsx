@@ -32,9 +32,9 @@ const matchesPool = (question: StudyQuestion, pool: Pool): boolean => {
     case "missed":
       return progress?.last_result === false;
     case "unmastered":
-      return (progress?.mastery_count ?? 0) < 2;
+      return (progress?.mastery_count ?? 0) < 3;
     case "mastered":
-      return (progress?.mastery_count ?? 0) >= 2;
+      return (progress?.mastery_count ?? 0) >= 3;
     default:
       return true;
   }

@@ -1,183 +1,293 @@
 import { shuffle } from "@/lib/distractors";
 import type { StudyQuestion } from "@/lib/types";
 
-export const MASTERY_TARGET = 2;
+/**
+ * Learn mode is a rolling active pool rather than a shuffled deck.
+ *
+ * A small working set (~7) is in play at any moment. Answering correctly moves a
+ * question up one level and pushes its next appearance further out; missing it
+ * knocks it back down and brings it round again soon, but never immediately. A
+ * question only leaves the pool once it is Mastered, and a new one takes its
+ * place — so the deck is introduced gradually instead of all at once.
+ */
 
-/** How many other questions to put between a miss and its retry. */
-const REINSERT_MIN = 3;
-const REINSERT_MAX = 7;
+export const MASTERY_MASTERED = 3;
+export const POOL_SIZE = 7;
 
-/** Correct-but-not-yet-mastered questions come back a little later. */
-const REVIEW_MIN = 5;
-const REVIEW_MAX = 9;
+export type MasteryLevel = 0 | 1 | 2 | 3;
 
-export type LearnState = {
-  /** question id -> mastery count, seeded from the database. */
-  mastery: Record<string, number>;
-  /** Upcoming question ids. The head is the question on screen. */
-  queue: string[];
-  answered: number;
-  correct: number;
-  /** Ids answered at least once this session. */
-  seen: string[];
-  /** Ids missed at any point this session, for "Review missed". */
-  missed: string[];
-  /** Consecutive correct answers right now. Resets to 0 on a miss. */
-  streak: number;
-  /** Longest streak reached, kept even after the current one breaks. */
-  bestStreak: number;
+export const MASTERY_LABELS: Record<MasteryLevel, string> = {
+  0: "New",
+  1: "Learning",
+  2: "Familiar",
+  3: "Mastered",
 };
 
-export type RoundRange = { min: number; max: number };
+/** Answers to leave between a question and its next appearance. */
+const SPACING: Record<"wrong" | "learning" | "familiar", [number, number]> = {
+  wrong: [2, 4],
+  learning: [4, 7],
+  familiar: [7, 12],
+};
 
-export const ROUND_LIMITS = { min: 5, max: 60 } as const;
-export const DEFAULT_ROUND_RANGE: RoundRange = { min: 10, max: 20 };
+export type CheckpointRange = { min: number; max: number };
+export const CHECKPOINT_LIMITS = { min: 3, max: 25 } as const;
+export const DEFAULT_CHECKPOINT_RANGE: CheckpointRange = { min: 5, max: 10 };
+
+export type QuestionState = {
+  mastery: MasteryLevel;
+  wrongCount: number;
+  /** Answer index when this was last shown; -1 if never. */
+  lastSeen: number;
+  /** Earliest answer index at which it may be shown again. */
+  dueAt: number;
+  /** Whether it has been answered at least once, ever. */
+  seen: boolean;
+};
+
+export type LearnState = {
+  states: Record<string, QuestionState>;
+  /** The active working set. */
+  pool: string[];
+  /** Ids not yet brought into the pool. */
+  backlog: string[];
+  current: string | null;
+  answered: number;
+  correct: number;
+  streak: number;
+  bestStreak: number;
+  missed: string[];
+  /** Newly mastered since the last checkpoint, and the target that triggers one. */
+  masteredSinceCheckpoint: number;
+  checkpointTarget: number;
+  /** Carried in the state so every answer uses the same range without the
+   *  caller having to remember to pass it. */
+  checkpointRange: CheckpointRange;
+  /** Ids that reached Mastered during this session. */
+  masteredThisSession: string[];
+};
+
+export type Counts = { new: number; learning: number; familiar: number; mastered: number; total: number };
 
 function randomBetween(min: number, max: number) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
-/**
- * How many questions the next round should hold. Varying the length inside the
- * chosen range keeps rounds from feeling like a metronome, and the last round
- * is trimmed to whatever is actually left.
- */
-export function nextRoundSize(range: RoundRange, remaining: number): number {
+export function checkpointTarget(range: CheckpointRange): number {
   const min = Math.max(1, Math.min(range.min, range.max));
-  const max = Math.max(min, range.max);
-  return Math.max(1, Math.min(remaining, randomBetween(min, max)));
+  return randomBetween(min, Math.max(min, range.max));
 }
+
+const clampLevel = (n: number): MasteryLevel => Math.max(0, Math.min(MASTERY_MASTERED, n)) as MasteryLevel;
 
 /**
- * Choose the questions for one round, weakest first: answers you got wrong come
- * before ones you have never seen, which come before ones you have already got
- * right once. Shuffled inside each tier so the order is not the deck order.
+ * Where a question sits in the queue for attention.
+ * Wrong/weak > Learning > Familiar > New > Mastered.
  */
-export function pickRoundQuestions(
-  questions: readonly StudyQuestion[],
-  mastery: Record<string, number>,
-  size: number,
-): StudyQuestion[] {
-  const missed: StudyQuestion[] = [];
-  const unseen: StudyQuestion[] = [];
-  const learning: StudyQuestion[] = [];
-
-  for (const question of questions) {
-    const level = mastery[question.id] ?? 0;
-    if (level >= MASTERY_TARGET) continue;
-    const progress = question.progress;
-    if (level === 0 && progress && progress.last_result === false) missed.push(question);
-    else if (level === 0 && (!progress || progress.times_seen === 0)) unseen.push(question);
-    else learning.push(question);
-  }
-
-  return [...shuffle(missed), ...shuffle(unseen), ...shuffle(learning)].slice(0, Math.max(1, size));
+function tier(state: QuestionState): number {
+  if (state.mastery >= MASTERY_MASTERED) return 4;
+  if (state.wrongCount > 0 && state.mastery <= 1) return 0;
+  if (state.mastery === 1) return 1;
+  if (state.mastery === 2) return 2;
+  return state.seen ? 1 : 3;
 }
 
-/** Questions in the deck that still need work, across every round so far. */
-export function remainingCount(
-  questions: readonly StudyQuestion[],
-  mastery: Record<string, number>,
-): number {
-  return questions.filter((q) => (mastery[q.id] ?? 0) < MASTERY_TARGET).length;
+/** Mastery after a correct answer: 0→1→2→3, and 3 stays 3. */
+export function levelUp(mastery: MasteryLevel): MasteryLevel {
+  return clampLevel(mastery + 1);
 }
 
-/**
- * Order the opening queue by how shaky each question is:
- * last answer was wrong -> never seen -> answered correctly once.
- * Questions are shuffled within each tier so the order is not the deck order.
- */
-export function buildInitialQueue(questions: readonly StudyQuestion[]): string[] {
-  const missed: StudyQuestion[] = [];
-  const unseen: StudyQuestion[] = [];
-  const learning: StudyQuestion[] = [];
-
-  for (const question of questions) {
-    const progress = question.progress;
-    if (progress && progress.last_result === false) missed.push(question);
-    else if (!progress || progress.times_seen === 0) unseen.push(question);
-    else learning.push(question);
-  }
-
-  return [...shuffle(missed), ...shuffle(unseen), ...shuffle(learning)].map((q) => q.id);
+/** Mastery after a miss: 3→1, 2→1, 1→0, 0→0. A slip costs progress, not everything. */
+export function levelDown(mastery: MasteryLevel): MasteryLevel {
+  if (mastery >= 2) return 1;
+  return 0;
 }
 
-/**
- * Build the state for one round. `seed` carries mastery forward from earlier
- * rounds so a question proven in round 1 is not asked again in round 3.
- */
-export function createLearnState(
-  questions: readonly StudyQuestion[],
-  seed?: Record<string, number>,
-): LearnState {
-  const mastery: Record<string, number> = {};
-  for (const question of questions) {
-    // A question already mastered in the database still has to be proven once
-    // more this session, so a Learn run is never empty.
-    mastery[question.id] =
-      seed?.[question.id] ??
-      Math.min(question.progress?.mastery_count ?? 0, MASTERY_TARGET - 1);
-  }
+function spacingFor(mastery: MasteryLevel, wasCorrect: boolean): number {
+  if (!wasCorrect) return randomBetween(...SPACING.wrong);
+  if (mastery === 1) return randomBetween(...SPACING.learning);
+  return randomBetween(...SPACING.familiar);
+}
+
+function initialState(question: StudyQuestion): QuestionState {
+  const stored = question.progress;
+  const mastery = clampLevel(stored?.mastery_count ?? 0);
   return {
     mastery,
-    queue: buildInitialQueue(questions),
+    wrongCount: stored?.times_incorrect ?? 0,
+    lastSeen: -1,
+    dueAt: 0,
+    seen: (stored?.times_seen ?? 0) > 0,
+  };
+}
+
+/** Order questions by how much attention they need, shuffled within each tier. */
+function byNeed(questions: readonly StudyQuestion[], states: Record<string, QuestionState>): string[] {
+  const tiers = new Map<number, StudyQuestion[]>();
+  for (const question of questions) {
+    const t = tier(states[question.id]);
+    const bucket = tiers.get(t);
+    if (bucket) bucket.push(question);
+    else tiers.set(t, [question]);
+  }
+  return [...tiers.keys()]
+    .sort((a, b) => a - b)
+    .flatMap((t) => shuffle(tiers.get(t)!).map((q) => q.id));
+}
+
+export function createLearnState(
+  questions: readonly StudyQuestion[],
+  range: CheckpointRange = DEFAULT_CHECKPOINT_RANGE,
+): LearnState {
+  const states: Record<string, QuestionState> = {};
+  for (const question of questions) states[question.id] = initialState(question);
+
+  const unmastered = questions.filter((q) => states[q.id].mastery < MASTERY_MASTERED);
+  const ordered = byNeed(unmastered, states);
+  const pool = ordered.slice(0, POOL_SIZE);
+  const backlog = ordered.slice(POOL_SIZE);
+
+  return {
+    states,
+    pool,
+    backlog,
+    current: pool[0] ?? null,
     answered: 0,
     correct: 0,
-    seen: [],
-    missed: [],
     streak: 0,
     bestStreak: 0,
+    missed: [],
+    masteredSinceCheckpoint: 0,
+    checkpointTarget: checkpointTarget(range),
+    checkpointRange: range,
+    masteredThisSession: [],
   };
 }
 
 /**
- * Advance the session by one answer.
- *
- * Correct  -> mastery + 1. At the target the question leaves the queue, other-
- *             wise it is reinserted several questions later.
- * Incorrect-> mastery resets to 0 and the question comes back in 3-7 questions,
- *             far enough that short-term recall does not carry the answer.
+ * Choose what to show next: the neediest question whose spacing has elapsed,
+ * never the one just answered. Ties are broken randomly so a run of Learning
+ * questions does not always come back in the same order.
  */
-export function applyAnswer(state: LearnState, questionId: string, wasCorrect: boolean): LearnState {
-  const rest = state.queue.filter((id, index) => !(index === 0 && id === questionId));
-  const nextMastery = wasCorrect ? (state.mastery[questionId] ?? 0) + 1 : 0;
+function pickNext(state: LearnState, justAnswered: string | null): string | null {
+  if (state.pool.length === 0) return null;
 
-  const queue = [...rest];
-  if (nextMastery < MASTERY_TARGET) {
-    const [min, max] = wasCorrect ? [REVIEW_MIN, REVIEW_MAX] : [REINSERT_MIN, REINSERT_MAX];
-    const offset = Math.min(queue.length, randomBetween(min, max));
-    queue.splice(offset, 0, questionId);
+  const eligible = state.pool.filter((id) => id !== justAnswered);
+  const candidates = eligible.length > 0 ? eligible : state.pool;
+
+  const due = candidates.filter((id) => state.states[id].dueAt <= state.answered);
+  const from = due.length > 0 ? due : candidates;
+
+  const sorted = [...from].sort((a, b) => {
+    const byTier = tier(state.states[a]) - tier(state.states[b]);
+    if (byTier !== 0) return byTier;
+    return state.states[a].dueAt - state.states[b].dueAt;
+  });
+
+  const bestTier = tier(state.states[sorted[0]]);
+  const topGroup = sorted.filter((id) => tier(state.states[id]) === bestTier);
+  return topGroup[Math.floor(Math.random() * Math.min(topGroup.length, 3))];
+}
+
+export type AnswerOutcome = {
+  state: LearnState;
+  /** True when this answer took the question to Mastered. */
+  mastered: boolean;
+  /** True when enough questions have been mastered to pause for a checkpoint. */
+  checkpoint: boolean;
+};
+
+export function applyAnswer(
+  state: LearnState,
+  questionId: string,
+  wasCorrect: boolean,
+): AnswerOutcome {
+  const previous = state.states[questionId];
+  if (!previous) return { state, mastered: false, checkpoint: false };
+
+  const answered = state.answered + 1;
+  const mastery = wasCorrect ? levelUp(previous.mastery) : levelDown(previous.mastery);
+  const becameMastered = mastery >= MASTERY_MASTERED && previous.mastery < MASTERY_MASTERED;
+
+  const updated: QuestionState = {
+    mastery,
+    wrongCount: previous.wrongCount + (wasCorrect ? 0 : 1),
+    lastSeen: answered,
+    dueAt: answered + spacingFor(mastery, wasCorrect),
+    seen: true,
+  };
+
+  const states = { ...state.states, [questionId]: updated };
+
+  // A mastered question leaves the pool and a fresh one takes its place.
+  let pool = state.pool;
+  let backlog = state.backlog;
+  if (mastery >= MASTERY_MASTERED) {
+    pool = pool.filter((id) => id !== questionId);
+    while (pool.length < POOL_SIZE && backlog.length > 0) {
+      const [next, ...rest] = backlog;
+      backlog = rest;
+      pool = [...pool, next];
+    }
   }
 
-  return {
-    mastery: { ...state.mastery, [questionId]: nextMastery },
-    queue,
-    answered: state.answered + 1,
+  const masteredSinceCheckpoint = state.masteredSinceCheckpoint + (becameMastered ? 1 : 0);
+  const reachedCheckpoint =
+    becameMastered && masteredSinceCheckpoint >= state.checkpointTarget && pool.length > 0;
+
+  const next: LearnState = {
+    states,
+    pool,
+    backlog,
+    current: null,
+    answered,
     correct: state.correct + (wasCorrect ? 1 : 0),
-    seen: state.seen.includes(questionId) ? state.seen : [...state.seen, questionId],
     streak: wasCorrect ? state.streak + 1 : 0,
     bestStreak: wasCorrect ? Math.max(state.bestStreak, state.streak + 1) : state.bestStreak,
     missed: wasCorrect || state.missed.includes(questionId) ? state.missed : [...state.missed, questionId],
+    masteredSinceCheckpoint: reachedCheckpoint ? 0 : masteredSinceCheckpoint,
+    checkpointTarget: reachedCheckpoint
+      ? checkpointTarget(state.checkpointRange)
+      : state.checkpointTarget,
+    checkpointRange: state.checkpointRange,
+    masteredThisSession: becameMastered
+      ? [...state.masteredThisSession, questionId]
+      : state.masteredThisSession,
+  };
+
+  return {
+    state: { ...next, current: pickNext(next, questionId) },
+    mastered: becameMastered,
+    checkpoint: reachedCheckpoint,
   };
 }
 
 export function isComplete(state: LearnState): boolean {
-  return state.queue.length === 0;
+  return state.pool.length === 0 && state.backlog.length === 0;
 }
 
-export function countsFor(state: LearnState, questions: readonly StudyQuestion[]) {
-  let mastered = 0;
-  let learning = 0;
-  let unseen = 0;
-  const inQueue = new Set(state.queue);
-  const seen = new Set(state.seen);
-
+export function countsFor(state: LearnState, questions: readonly StudyQuestion[]): Counts {
+  const counts: Counts = { new: 0, learning: 0, familiar: 0, mastered: 0, total: questions.length };
   for (const question of questions) {
-    const level = state.mastery[question.id] ?? 0;
-    if (!inQueue.has(question.id) || level >= MASTERY_TARGET) mastered += 1;
-    else if (level > 0 || seen.has(question.id) || (question.progress?.times_seen ?? 0) > 0) learning += 1;
-    else unseen += 1;
+    const level = state.states[question.id]?.mastery ?? 0;
+    if (level >= MASTERY_MASTERED) counts.mastered += 1;
+    else if (level === 2) counts.familiar += 1;
+    else if (level === 1) counts.learning += 1;
+    else if (state.states[question.id]?.seen) counts.learning += 1;
+    else counts.new += 1;
   }
+  return counts;
+}
 
-  return { mastered, learning, unseen, total: questions.length };
+export function remainingCount(state: LearnState): number {
+  return state.pool.length + state.backlog.length;
+}
+
+/** Change how often checkpoints appear without disturbing the session. */
+export function withCheckpointRange(state: LearnState, range: CheckpointRange): LearnState {
+  return {
+    ...state,
+    checkpointRange: range,
+    checkpointTarget: Math.max(1, Math.min(state.checkpointTarget, range.max)),
+  };
 }
