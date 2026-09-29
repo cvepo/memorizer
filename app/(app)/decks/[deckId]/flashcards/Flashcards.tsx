@@ -7,9 +7,14 @@ import { Button, ButtonLink, Card, PageHeader, ProgressBar, cn } from "@/compone
 import { shuffle } from "@/lib/distractors";
 import type { StudyQuestion } from "@/lib/types";
 
+/** Shared by both faces. Generous vertical padding leaves room for the label
+ * at the top and the hint at the bottom without crowding long questions. */
 const FACE =
   "absolute inset-0 flex flex-col items-center justify-center gap-3 overflow-y-auto " +
-  "rounded-2xl border border-line bg-surface p-8 text-center [backface-visibility:hidden]";
+  "rounded-2xl border px-6 py-14 text-center [backface-visibility:hidden] sm:px-10";
+
+const FACE_LABEL = "absolute inset-x-0 top-5 text-[11px] font-semibold uppercase tracking-[0.14em]";
+const FACE_HINT = "absolute inset-x-0 bottom-5 text-xs text-muted";
 
 export function Flashcards({
   deckId,
@@ -106,38 +111,47 @@ export function Flashcards({
         <ProgressBar value={index + 1} total={order.length} tone="accent" />
       </div>
 
-      <div className="[perspective:1400px]">
-        <button
-          type="button"
-          onClick={flip}
-          aria-label={flipped ? "Show the question" : "Show the answer"}
-          className="block w-full rounded-2xl"
+      {/* The perspective has to sit on the rotating element's DIRECT parent,
+          otherwise the rotation is orthographic and reads as a squash rather
+          than a card turning over. */}
+      <button
+        type="button"
+        onClick={flip}
+        aria-label={flipped ? "Show the question" : "Show the answer"}
+        className="block w-full rounded-2xl [perspective:1200px]"
+      >
+        <div
+          className={cn(
+            "relative min-h-64 transition-transform duration-500 ease-in-out will-change-transform",
+            "[transform-style:preserve-3d] sm:min-h-80",
+            flipped && "[transform:rotateY(180deg)]",
+          )}
         >
-          <div
-            className={cn(
-              "relative min-h-64 transition-transform duration-500 [transform-style:preserve-3d] sm:min-h-80",
-              flipped && "[transform:rotateY(180deg)]",
-            )}
-          >
-            <div className={FACE} aria-hidden={flipped}>
-              <p className="text-xl font-medium leading-snug sm:text-2xl">{current.question_text}</p>
-            </div>
-            <div className={cn(FACE, "[transform:rotateY(180deg)]")} aria-hidden={!flipped}>
-              <p className="text-2xl font-semibold sm:text-3xl">{current.correct_answer}</p>
-              {current.explanation ? (
-                <p className="max-w-prose text-sm text-muted">{current.explanation}</p>
-              ) : null}
-            </div>
+          <div className={cn(FACE, "border-line bg-surface")} aria-hidden={flipped}>
+            <span className={cn(FACE_LABEL, "text-muted")}>Question</span>
+            <p className="text-xl font-medium leading-snug sm:text-2xl">{current.question_text}</p>
+            <span className={FACE_HINT}>Click or press Space to reveal</span>
           </div>
-        </button>
-      </div>
+
+          <div
+            className={cn(FACE, "tint-accent [transform:rotateY(180deg)]")}
+            aria-hidden={!flipped}
+          >
+            <span className={cn(FACE_LABEL, "text-accent")}>Answer</span>
+            <p className="text-2xl font-semibold sm:text-3xl">{current.correct_answer}</p>
+            {current.explanation ? (
+              <p className="max-w-prose text-sm text-muted">{current.explanation}</p>
+            ) : null}
+          </div>
+        </div>
+      </button>
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" onClick={previous} disabled={index === 0}>
             Previous
           </Button>
-          <Button onClick={flip}>Flip</Button>
+          <Button onClick={flip}>{flipped ? "Show question" : "Show answer"}</Button>
           <Button variant="secondary" onClick={next} disabled={atEnd}>
             Next
           </Button>
