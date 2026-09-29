@@ -4,30 +4,80 @@ import { redirect } from "next/navigation";
 import { ButtonLink, Card, EmptyState, MasteryBreakdown, PageHeader, ProgressBar } from "@/components/ui";
 import { DeckCard } from "@/components/DeckCard";
 import { getSession } from "@/lib/auth";
-import { deckStatsByDeck, emptyStats, listCourses, listDecksWithCourse } from "@/lib/data";
+import { deckStatsByDeck, emptyStats, listCourses, listDecksWithCourse, recentStudyActivity } from "@/lib/data";
+import type { StudyMode } from "@/lib/types";
 
 export const metadata = { title: "Study · Memorizer" };
+
+// study_activity holds one row per (profile, deck); a generous limit keeps the
+// whole history in view instead of only the ten most recent decks.
+const ACTIVITY_LIMIT = 500;
+
+const MODE_HREF: Record<StudyMode, (deckId: string) => string> = {
+  flashcards: (deckId) => `/decks/${deckId}`,
+  learn: (deckId) => `/decks/${deckId}/learn`,
+  quiz: (deckId) => `/decks/${deckId}/quiz`,
+};
+
+const MODE_LABEL: Record<StudyMode, string> = {
+  flashcards: "Continue Flashcards",
+  learn: "Continue Learn",
+  quiz: "Continue Quiz",
+};
+
+/** Small, server-computed relative time string — no date library needed. */
+function relativeTime(iso: string, now: number = Date.now()): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diffSec = Math.max(0, Math.round((now - then) / 1000));
+
+  if (diffSec < 60) return "Just now";
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} ${diffMin === 1 ? "minute" : "minutes"} ago`;
+  const diffHour = Math.round(diffMin / 60);
+  if (diffHour < 24) return `${diffHour} ${diffHour === 1 ? "hour" : "hours"} ago`;
+  const diffDay = Math.round(diffHour / 24);
+  if (diffDay < 7) return `${diffDay} ${diffDay === 1 ? "day" : "days"} ago`;
+  const diffWeek = Math.round(diffDay / 7);
+  if (diffWeek < 5) return `${diffWeek} ${diffWeek === 1 ? "week" : "weeks"} ago`;
+  const diffMonth = Math.round(diffDay / 30);
+  if (diffMonth < 12) return `${diffMonth} ${diffMonth === 1 ? "month" : "months"} ago`;
+  const diffYear = Math.round(diffDay / 365);
+  return `${diffYear} ${diffYear === 1 ? "year" : "years"} ago`;
+}
 
 export default async function HomePage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const [courses, decks, deckStats] = await Promise.all([
+  const [courses, decks, deckStats, activity] = await Promise.all([
     listCourses(),
     listDecksWithCourse(),
     deckStatsByDeck(session.profileId),
+    recentStudyActivity(session.profileId, ACTIVITY_LIMIT),
   ]);
 
   const isAdmin = session.role === "admin";
 
-  // Best "continue studying" candidate: most learning+unseen remaining among
-  // decks that still have something left to learn.
-  const continueDeck = decks
-    .map((deck) => ({ deck, stats: deckStats.get(deck.id) ?? emptyStats(deck.id) }))
-    .filter(({ stats }) => stats.total_questions > 0 && stats.learning + stats.unseen > 0)
-    .sort((a, b) => b.stats.learning + b.stats.unseen - (a.stats.learning + a.stats.unseen))[0];
+  const deckById = new Map(decks.map((deck) => [deck.id, deck]));
 
-  const recentDecks = decks.slice(0, 6);
+  // Most recent activity row whose deck still exists — deleted decks are
+  // skipped rather than producing a broken link.
+  const continueActivity = activity.find((row) => deckById.has(row.deck_id));
+  const continueDeck = continueActivity ? deckById.get(continueActivity.deck_id) ?? null : null;
+  const continueStats = continueDeck ? deckStats.get(continueDeck.id) ?? emptyStats(continueDeck.id) : null;
+
+  const lastStudiedAtByDeck = new Map(activity.map((row) => [row.deck_id, row.last_studied_at]));
+
+  const sortedDecks = [...decks].sort((a, b) => {
+    const aTime = lastStudiedAtByDeck.get(a.id);
+    const bTime = lastStudiedAtByDeck.get(b.id);
+    if (aTime && bTime) return new Date(bTime).getTime() - new Date(aTime).getTime();
+    if (aTime) return -1;
+    if (bTime) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  const recentDecks = sortedDecks.slice(0, 6);
 
   return (
     <div className="space-y-8">
@@ -35,42 +85,56 @@ export default async function HomePage() {
         title="Study"
         subtitle={`Welcome back, ${session.profileName}.`}
         actions={
-          isAdmin ? (
-            <>
-              <ButtonLink href="/import">Import questions</ButtonLink>
-              <ButtonLink href="/courses" variant="secondary">
-                New course
-              </ButtonLink>
-            </>
-          ) : null
+          <>
+            <ButtonLink href="/starred" variant="secondary">
+              Starred questions
+            </ButtonLink>
+            {isAdmin ? (
+              <>
+                <ButtonLink href="/import">Import questions</ButtonLink>
+                <ButtonLink href="/courses" variant="secondary">
+                  New course
+                </ButtonLink>
+              </>
+            ) : null}
+          </>
         }
       />
 
-      {continueDeck ? (
-        <section className="space-y-3">
-          <h2 className="text-lg font-medium">Continue studying</h2>
+      <section className="space-y-3">
+        <h2 className="text-lg font-medium">Continue studying</h2>
+        {continueDeck && continueActivity && continueStats ? (
           <Card className="space-y-4">
             <div>
-              {continueDeck.deck.course ? (
-                <p className="text-xs text-muted">{continueDeck.deck.course.name}</p>
-              ) : null}
-              <h3 className="text-lg font-medium">{continueDeck.deck.name}</h3>
+              {continueDeck.course ? <p className="text-xs text-muted">{continueDeck.course.name}</p> : null}
+              <h3 className="text-lg font-medium">{continueDeck.name}</h3>
+              <p className="mt-1 text-xs text-muted">
+                Last studied {relativeTime(continueActivity.last_studied_at)}
+              </p>
             </div>
-            <ProgressBar value={continueDeck.stats.mastered} total={continueDeck.stats.total_questions} />
+            <ProgressBar value={continueStats.mastered} total={continueStats.total_questions} />
             <MasteryBreakdown
-              mastered={continueDeck.stats.mastered}
-              learning={continueDeck.stats.learning}
-              unseen={continueDeck.stats.unseen}
+              mastered={continueStats.mastered}
+              learning={continueStats.learning}
+              unseen={continueStats.unseen}
             />
             <div className="flex flex-wrap gap-2">
-              <ButtonLink href={`/decks/${continueDeck.deck.id}/learn`}>Continue Learn</ButtonLink>
-              <ButtonLink href={`/decks/${continueDeck.deck.id}`} variant="secondary">
+              <ButtonLink href={MODE_HREF[continueActivity.last_mode](continueDeck.id)}>
+                {MODE_LABEL[continueActivity.last_mode]}
+              </ButtonLink>
+              <ButtonLink href={`/decks/${continueDeck.id}`} variant="secondary">
                 Deck overview
               </ButtonLink>
             </div>
           </Card>
-        </section>
-      ) : null}
+        ) : (
+          <EmptyState
+            title="Choose a deck to start"
+            description="Once you study a deck, you can jump right back in from here."
+            action={<ButtonLink href="/decks">Browse decks</ButtonLink>}
+          />
+        )}
+      </section>
 
       <section className="space-y-3">
         <h2 className="text-lg font-medium">Courses</h2>

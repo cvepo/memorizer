@@ -79,6 +79,41 @@ export type QuizAnswer = {
   position: number;
 };
 
+export type StarredQuestion = {
+  profile_id: string;
+  question_id: string;
+  created_at: string;
+};
+
+export type StudyActivity = {
+  profile_id: string;
+  deck_id: string;
+  last_mode: StudyMode;
+  last_studied_at: string;
+};
+
+export type StudyMode = "flashcards" | "learn" | "quiz";
+
+export type DeckReviewCounts = {
+  deck_id: string;
+  needs_review: number;
+  starred: number;
+};
+
+/** A question shown in the Needs review / Starred / Browse lists. */
+export type QuestionSummary = {
+  id: string;
+  deck_id: string;
+  question_text: string;
+  correct_answer: string;
+  topic: string | null;
+  position: number;
+  times_incorrect: number;
+  mastery_count: number;
+  times_seen: number;
+  starred: boolean;
+};
+
 export type DeckStats = {
   deck_id: string;
   total_questions: number;
@@ -166,6 +201,20 @@ export type Database = {
           BelongsTo<"quiz_answers_question_id_fkey", "question_id", "questions">,
         ]
       >;
+      starred_questions: Row<
+        StarredQuestion,
+        [
+          BelongsTo<"starred_questions_profile_id_fkey", "profile_id", "profiles">,
+          BelongsTo<"starred_questions_question_id_fkey", "question_id", "questions">,
+        ]
+      >;
+      study_activity: Row<
+        StudyActivity,
+        [
+          BelongsTo<"study_activity_profile_id_fkey", "profile_id", "profiles">,
+          BelongsTo<"study_activity_deck_id_fkey", "deck_id", "decks">,
+        ]
+      >;
     };
     Views: Record<never, never>;
     Functions: {
@@ -184,6 +233,32 @@ export type Database = {
       record_answers: {
         Args: { p_profile_id: string; p_answers: { question_id: string; correct: boolean }[] };
         Returns: undefined;
+      };
+      record_answer_once: {
+        Args: {
+          p_event_id: string;
+          p_profile_id: string;
+          p_question_id: string;
+          p_correct: boolean;
+          p_source?: string;
+        };
+        Returns: boolean;
+      };
+      record_answers_once: {
+        Args: {
+          p_profile_id: string;
+          p_answers: { event_id: string; question_id: string; correct: boolean }[];
+          p_source?: string;
+        };
+        Returns: undefined;
+      };
+      touch_study_activity: {
+        Args: { p_profile_id: string; p_deck_id: string; p_mode?: string };
+        Returns: undefined;
+      };
+      deck_review_counts: {
+        Args: { p_profile_id: string };
+        Returns: DeckReviewCounts[];
       };
     };
     Enums: Record<never, never>;

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 import { Badge, cn } from "@/components/ui";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { signOut } from "@/lib/actions/auth";
 
 const LINKS = [
@@ -12,6 +13,7 @@ const LINKS = [
   { href: "/courses", label: "Courses" },
   { href: "/decks", label: "Decks" },
   { href: "/search", label: "Search" },
+  { href: "/starred", label: "Starred" },
   { href: "/import", label: "Import" },
 ];
 
@@ -30,7 +32,7 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
           Memorizer
         </Link>
 
-        <nav className="ml-2 hidden items-center gap-1 sm:flex">
+        <nav className="ml-2 hidden items-center gap-1 lg:flex">
           {links.map((link) => (
             <Link
               key={link.href}
@@ -45,8 +47,9 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-2">
-          <div className="hidden items-center gap-2 sm:flex">
+        <div className="ml-auto flex items-center gap-3">
+          <div className="hidden items-center gap-3 lg:flex">
+            <ThemeToggle />
             <Link href="/profile" className="text-sm text-muted hover:text-ink" title="Switch profile">
               {profileName}
             </Link>
@@ -62,7 +65,7 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
             aria-label="Menu"
             aria-expanded={open}
             onClick={() => setOpen((value) => !value)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-line text-ink sm:hidden"
+            className="flex h-11 w-11 items-center justify-center rounded-lg border border-line text-ink lg:hidden"
           >
             <span aria-hidden>{open ? "✕" : "☰"}</span>
           </button>
@@ -70,7 +73,7 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
       </div>
 
       {open ? (
-        <div className="border-t border-line bg-surface px-4 py-3 sm:hidden">
+        <div className="border-t border-line bg-surface px-4 py-3 lg:hidden">
           <nav className="flex flex-col gap-1">
             {links.map((link) => (
               <Link
@@ -78,7 +81,7 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
                 href={link.href}
                 onClick={() => setOpen(false)}
                 className={cn(
-                  "rounded-lg px-3 py-2.5 text-sm",
+                  "flex min-h-11 items-center rounded-lg px-3 py-2.5 text-sm",
                   isActive(link.href) ? "bg-accent text-accent-fg" : "text-ink",
                 )}
               >
@@ -87,12 +90,16 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
             ))}
           </nav>
           <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
-            <Link href="/profile" className="text-sm text-muted">
+            <span className="text-sm font-medium text-ink">Theme</span>
+            <ThemeToggle />
+          </div>
+          <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
+            <Link href="/profile" className="flex min-h-11 items-center text-sm text-muted">
               {profileName}
               {isAdmin ? " · Admin" : ""}
             </Link>
             <form action={signOut}>
-              <button type="submit" className="text-sm text-muted">
+              <button type="submit" className="flex min-h-11 items-center text-sm text-muted">
                 Sign out
               </button>
             </form>

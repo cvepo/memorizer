@@ -1,16 +1,20 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
-   Dark only, for now. The palette is Discord-inspired: neutral dark surfaces,
-   blurple reserved for primary actions and active state, green and red used
-   only for correct and incorrect.
+   Two themes off one set of semantic tokens. Dark is Discord-inspired: neutral
+   dark surfaces, blurple for primary actions and active state, green and red
+   reserved for correct and incorrect. Light is the same system in a bright,
+   neutral key — off-white page, white cards, dark text, restrained borders —
+   keeping the identical blurple accent so the app reads the same in both.
 
-   A light palette lives below under [data-theme="light"] but nothing sets that
-   attribute and no toggle ships. To bring light mode back: restore the
-   ThemeToggle component, render it in Nav and on the login page, and re-add the
-   `prefers-color-scheme` block.
+   Resolution order: dark is the default, `prefers-color-scheme: light` moves to
+   light unless the user pinned dark, and an explicit [data-theme] always wins.
 --------------------------------------------------------------------------- */
-:root {
+
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+
+:root,
+:root[data-theme="dark"] {
   --bg: #313338;
   --surface: #2b2d31;
   --surface-2: #35373c;
@@ -26,27 +30,51 @@
   --success-fg: #ffffff;
   --danger: #f23f42;
   --danger-fg: #ffffff;
+  --star: #e8b931;
   --ring: rgba(88, 101, 242, 0.55);
 }
 
-/* Kept for a future toggle; nothing applies this today. */
+/* Light values, applied either by system preference or by an explicit choice. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f7f7f9;
+    --surface: #ffffff;
+    --surface-2: #f1f2f5;
+    --surface-sunken: #eceef2;
+    --border: rgba(18, 20, 28, 0.1);
+    --border-strong: rgba(18, 20, 28, 0.2);
+    --text: #16181d;
+    --muted: #5c6270;
+    --accent: #4b58e6;
+    --accent-hover: #3b46c4;
+    --accent-fg: #ffffff;
+    --success: #12833f;
+    --success-fg: #ffffff;
+    --danger: #cf2c30;
+    --danger-fg: #ffffff;
+    --star: #b47b06;
+    --ring: rgba(75, 88, 230, 0.45);
+  }
+}
+
 :root[data-theme="light"] {
-  --bg: #fef9da;
+  --bg: #f7f7f9;
   --surface: #ffffff;
-  --surface-2: #ffdcdc;
-  --surface-sunken: #fdf3c8;
-  --border: rgba(47, 47, 47, 0.1);
-  --border-strong: rgba(47, 47, 47, 0.2);
-  --text: #2f2f2f;
-  --muted: #666666;
-  --accent: #d0a4a3;
-  --accent-hover: #c39392;
-  --accent-fg: #2f2f2f;
-  --success: #93a571;
-  --success-fg: #2f2f2f;
-  --danger: #b4544c;
+  --surface-2: #f1f2f5;
+  --surface-sunken: #eceef2;
+  --border: rgba(18, 20, 28, 0.1);
+  --border-strong: rgba(18, 20, 28, 0.2);
+  --text: #16181d;
+  --muted: #5c6270;
+  --accent: #4b58e6;
+  --accent-hover: #3b46c4;
+  --accent-fg: #ffffff;
+  --success: #12833f;
+  --success-fg: #ffffff;
+  --danger: #cf2c30;
   --danger-fg: #ffffff;
-  --ring: rgba(208, 164, 163, 0.55);
+  --star: #b47b06;
+  --ring: rgba(75, 88, 230, 0.45);
 }
 
 @theme inline {
@@ -65,10 +93,23 @@
   --color-success-fg: var(--success-fg);
   --color-danger: var(--danger);
   --color-danger-fg: var(--danger-fg);
+  --color-star: var(--star);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Keeps native form controls, scrollbars and caret in step with the theme. */
 html {
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  html:not([data-theme="dark"]) {
+    color-scheme: light;
+  }
+}
+html[data-theme="light"] {
+  color-scheme: light;
+}
+html[data-theme="dark"] {
   color-scheme: dark;
 }
 
@@ -88,6 +129,13 @@ body {
   outline-offset: 2px;
 }
 
+/* Inputs must be at least 16px on mobile or iOS zooms the page on focus. */
+@media (max-width: 640px) {
+  :where(input, select, textarea) {
+    font-size: 16px;
+  }
+}
+
 /* Tinted state surfaces. color-mix keeps correct/incorrect legible in both
    themes without a second set of hard-coded hexes. */
 @utility tint-success {
@@ -103,9 +151,14 @@ body {
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
+/* Bottom action bars sit above the home indicator on phones. */
+@utility pb-safe {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
 /* The text of a new flashcard slides in a few pixels as it arrives. It never
-   starts fully transparent, because on a dark background that reads as a flash
-   rather than as movement. */
+   starts fully transparent, because that reads as a flash rather than as
+   movement. */
 @keyframes card-enter {
   from {
     opacity: 0.15;

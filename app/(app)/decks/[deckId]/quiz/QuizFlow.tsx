@@ -1,12 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { MCQOption, OPTION_LABELS } from "@/components/MCQOption";
 import { Button, ButtonLink, Card, PageHeader, ProgressBar, cn } from "@/components/ui";
+import { touchStudyActivity } from "@/lib/actions/activity";
 import { submitQuiz, type SubmittedQuizAnswer } from "@/lib/actions/study";
 import { generateChoices, shuffle, type Choice } from "@/lib/distractors";
+import {
+  answerEventId,
+  answeredCount,
+  clearDraft,
+  newAttemptId,
+  pruneDraft,
+  readDraft,
+  validateDraft,
+  writeDraft,
+  type DraftConflict,
+  type QuizDraft,
+} from "@/lib/quizDraft";
 import type { StudyQuestion } from "@/lib/types";
 
 type Stage = "settings" | "running" | "results";
@@ -17,7 +30,15 @@ type CountChoice = number | "all";
 /** One question with the choices it was given when the quiz started. */
 type QuizItem = { question: StudyQuestion; choices: Choice[] };
 
+/** What the mount-time draft lookup found. `checked` gates the resume panel. */
+type DraftState = { checked: boolean; draft: QuizDraft | null; conflict: DraftConflict | null };
+
+/** What a confirmed discard should do next. */
+type DiscardIntent = "dismiss" | "start";
+
 const COUNT_OPTIONS = [10, 20, 30, 50];
+
+const DRAFT_WRITE_DELAY_MS = 300;
 
 const POOL_OPTIONS: { value: Pool; label: string }[] = [
   { value: "all", label: "All Questions" },
@@ -43,11 +64,13 @@ const matchesPool = (question: StudyQuestion, pool: Pool): boolean => {
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 export function QuizFlow({
+  profileId,
   deckId,
   deckName,
   questions,
   topics,
 }: {
+  profileId: string;
   deckId: string;
   deckName: string;
   questions: StudyQuestion[];
@@ -67,12 +90,26 @@ export function QuizFlow({
   const [feedback, setFeedback] = useState<Feedback>("end");
 
   // Running
+  const [attemptId, setAttemptId] = useState("");
   const [items, setItems] = useState<QuizItem[]>([]);
   const [answers, setAnswers] = useState<(string | null)[]>([]);
+  const [revealedList, setRevealedList] = useState<boolean[]>([]);
   const [index, setIndex] = useState(0);
   const [startedAt, setStartedAt] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Draft recovery
+  const [draftState, setDraftState] = useState<DraftState>({
+    checked: false,
+    draft: null,
+    conflict: null,
+  });
+  const [discardIntent, setDiscardIntent] = useState<DiscardIntent | null>(null);
+
+  const lookedForDraft = useRef(false);
+  const touchedActivity = useRef(false);
+  const submitted = useRef(false);
 
   const topicFiltered = useMemo(
     () =>
@@ -105,7 +142,65 @@ export function QuizFlow({
       prev.includes(topic) ? prev.filter((t) => t !== topic) : [...prev, topic],
     );
 
-  const startQuiz = () => {
+  // ---------------------------------------------------------------------------
+  // Draft lookup. localStorage is client-only, so this cannot run during render.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (lookedForDraft.current) return;
+    lookedForDraft.current = true;
+    const found = readDraft(profileId, deckId);
+    const conflict = found ? validateDraft(found, questions) : null;
+    setDraftState({ checked: true, draft: found, conflict });
+  }, [profileId, deckId, questions]);
+
+  // ---------------------------------------------------------------------------
+  // Draft persistence. Trailing-edge debounce: at most one write per 300ms of
+  // answering, moving or revealing.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (stage !== "running" || items.length === 0 || !attemptId || submitted.current) return;
+
+    const timer = setTimeout(() => {
+      writeDraft({
+        profileId,
+        deckId,
+        attemptId,
+        items: items.map((item) => ({
+          questionId: item.question.id,
+          questionText: item.question.question_text,
+          correctAnswer: item.question.correct_answer,
+          choices: item.choices.map((choice) => ({ text: choice.text, isCorrect: choice.isCorrect })),
+        })),
+        answers,
+        revealed: revealedList,
+        index,
+        settings: { countChoice, pool, selectedTopics, shuffleQuestions, shuffleChoices, feedback },
+        startedAt,
+      });
+    }, DRAFT_WRITE_DELAY_MS);
+
+    return () => clearTimeout(timer);
+  }, [
+    stage,
+    items,
+    answers,
+    revealedList,
+    index,
+    attemptId,
+    startedAt,
+    profileId,
+    deckId,
+    countChoice,
+    pool,
+    selectedTopics,
+    shuffleQuestions,
+    shuffleChoices,
+    feedback,
+  ]);
+
+  const startQuiz = useCallback(() => {
     const ordered = shuffleQuestions ? shuffle(resolvedPool) : resolvedPool;
     const picked = ordered.slice(0, quizLength);
 
@@ -119,33 +214,112 @@ export function QuizFlow({
       };
     });
 
+    submitted.current = false;
+    touchedActivity.current = false;
+    setAttemptId(newAttemptId());
     setItems(built);
     setAnswers(built.map(() => null));
+    setRevealedList(built.map(() => false));
     setIndex(0);
     setStartedAt(new Date().toISOString());
     setConfirming(false);
     setError(null);
     setStage("running");
+  }, [shuffleQuestions, resolvedPool, quizLength, questions, shuffleChoices]);
+
+  /** Put an unfinished quiz back exactly as it was left. */
+  const resume = useCallback(() => {
+    const found = draftState.draft;
+    if (!found) return;
+
+    const usable = draftState.conflict ? pruneDraft(found, draftState.conflict) : found;
+    const byId = new Map(questions.map((q) => [q.id, q]));
+
+    const built: QuizItem[] = [];
+    const restoredAnswers: (string | null)[] = [];
+    const restoredRevealed: boolean[] = [];
+    usable.items.forEach((item, i) => {
+      const question = byId.get(item.questionId);
+      if (!question) return;
+      built.push({
+        question,
+        choices: item.choices.map((choice) => ({ text: choice.text, isCorrect: choice.isCorrect })),
+      });
+      restoredAnswers.push(usable.answers[i] ?? null);
+      restoredRevealed.push(usable.revealed[i] ?? false);
+    });
+
+    if (built.length === 0) return;
+
+    setCountChoice(usable.settings.countChoice);
+    setPool(usable.settings.pool);
+    setSelectedTopics(usable.settings.selectedTopics);
+    setShuffleQuestions(usable.settings.shuffleQuestions);
+    setShuffleChoices(usable.settings.shuffleChoices);
+    setFeedback(usable.settings.feedback);
+
+    submitted.current = false;
+    touchedActivity.current = restoredAnswers.some((a) => a !== null);
+    setAttemptId(usable.attemptId);
+    setItems(built);
+    setAnswers(restoredAnswers);
+    setRevealedList(restoredRevealed);
+    setIndex(Math.min(usable.index, built.length - 1));
+    setStartedAt(usable.startedAt);
+    setConfirming(false);
+    setError(null);
+    setDraftState({ checked: true, draft: null, conflict: null });
+    setStage("running");
+  }, [draftState, questions]);
+
+  const confirmDiscard = () => {
+    const intent = discardIntent;
+    clearDraft(profileId, deckId);
+    setDraftState({ checked: true, draft: null, conflict: null });
+    setDiscardIntent(null);
+    if (intent === "start") startQuiz();
+  };
+
+  const requestStart = () => {
+    if (draftState.draft) {
+      setDiscardIntent("start");
+      return;
+    }
+    startQuiz();
   };
 
   const total = items.length;
   const current = items[index];
   const selected = answers[index] ?? null;
-  const revealed = feedback === "each" && selected !== null;
+  const revealed = revealedList[index] ?? false;
   const unanswered = answers.filter((a) => a === null).length;
   const isLast = index === total - 1;
 
   const select = useCallback(
     (text: string) => {
+      // In "after each question" mode an answered question is locked.
+      if (feedback === "each" && answers[index] !== null) return;
+
       setAnswers((prev) => {
-        // In "after each question" mode an answered question is locked.
-        if (feedback === "each" && prev[index] !== null) return prev;
         const next = [...prev];
         next[index] = text;
         return next;
       });
+      if (feedback === "each") {
+        setRevealedList((prev) => {
+          const next = [...prev];
+          next[index] = true;
+          return next;
+        });
+      }
+
+      if (!touchedActivity.current) {
+        touchedActivity.current = true;
+        // Activity only — this never touches mastery, which submitQuiz owns.
+        void touchStudyActivity(deckId, "quiz").catch(() => {});
+      }
     },
-    [feedback, index],
+    [feedback, answers, index, deckId],
   );
 
   const go = useCallback(
@@ -159,6 +333,9 @@ export function QuizFlow({
       const answer = answers[i] ?? null;
       const chosen = item.choices.find((choice) => choice.text === answer);
       return {
+        // Derived from the attempt, so resubmitting the same attempt replays
+        // the same ids and mastery is applied exactly once.
+        eventId: answerEventId(attemptId, item.question.id),
         questionId: item.question.id,
         questionText: item.question.question_text,
         correctAnswer: item.question.correct_answer,
@@ -174,10 +351,15 @@ export function QuizFlow({
     const payload = buildAnswers();
     startTransition(async () => {
       try {
-        const attemptId = await submitQuiz(deckId, payload, startedAt);
+        const id = await submitQuiz(deckId, payload, startedAt, attemptId);
+        // Only now is the work safely on the server.
+        submitted.current = true;
+        clearDraft(profileId, deckId);
         setStage("results");
-        router.push(`/decks/${deckId}/quiz/${attemptId}`);
+        router.push(`/decks/${deckId}/quiz/${id}`);
       } catch (cause) {
+        // The draft stays put, so this attempt survives a reload and a retry
+        // reuses the same attempt id rather than creating a second one.
         setError(cause instanceof Error ? cause.message : "Could not save this quiz. Please try again.");
       }
     });
@@ -231,6 +413,11 @@ export function QuizFlow({
   // -------------------------------------------------------------------------
 
   if (stage === "settings") {
+    const found = draftState.draft;
+    const conflict = draftState.conflict;
+    const affected = conflict ? conflict.missing.length + conflict.changed.length : 0;
+    const recoverable = conflict ? conflict.valid.length : (found?.items.length ?? 0);
+
     return (
       <div className="space-y-6">
         <PageHeader
@@ -242,6 +429,56 @@ export function QuizFlow({
             </ButtonLink>
           }
         />
+
+        {found ? (
+          <div className="space-y-3 rounded-2xl border tint-accent p-4">
+            <div className="space-y-1">
+              <h2 className="text-sm font-medium">Unfinished quiz</h2>
+              <p className="text-sm text-muted tabular-nums">
+                {answeredCount(found)} of {found.items.length} answered
+              </p>
+            </div>
+
+            {conflict ? (
+              <p className="text-sm">
+                {affected === 1
+                  ? "1 question in this quiz has changed or been removed."
+                  : `${affected} questions in this quiz have changed or been removed.`}{" "}
+                {recoverable > 0
+                  ? `You can carry on with the ${plural(recoverable, "question")} that still match this deck.`
+                  : "None of its questions still match this deck, so it can only be started again."}
+              </p>
+            ) : null}
+
+            {discardIntent === null ? (
+              <div className="flex flex-wrap gap-2">
+                {recoverable > 0 ? (
+                  <Button onClick={resume}>
+                    {conflict ? `Resume with ${plural(recoverable, "question")}` : "Resume quiz"}
+                  </Button>
+                ) : null}
+                <Button
+                  variant="secondary"
+                  onClick={() => setDiscardIntent("dismiss")}
+                >
+                  Start a new quiz
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-3 rounded-xl border tint-danger p-4">
+                <p className="text-sm">This will discard your unfinished quiz.</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="danger" onClick={confirmDiscard}>
+                    Discard
+                  </Button>
+                  <Button variant="secondary" onClick={() => setDiscardIntent(null)}>
+                    Keep
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
 
         <div className="space-y-4">
           <Card className="space-y-3">
@@ -378,7 +615,7 @@ export function QuizFlow({
         </div>
 
         <div className="space-y-2">
-          <Button size="lg" disabled={quizLength === 0} onClick={startQuiz}>
+          <Button size="lg" disabled={quizLength === 0} onClick={requestStart}>
             Start quiz
           </Button>
           <p className="text-sm text-muted">
@@ -485,7 +722,16 @@ export function QuizFlow({
       </Card>
 
       {error ? (
-        <div className="rounded-xl border tint-danger p-4 text-sm text-danger">{error}</div>
+        <div className="space-y-3 rounded-xl border tint-danger p-4 text-sm">
+          <p className="text-danger">{error}</p>
+          <p className="text-muted">
+            Your answers are saved on this device. Try again, or come back to this deck later to
+            finish submitting.
+          </p>
+          <Button variant="danger" onClick={doSubmit} disabled={pending}>
+            {pending ? "Submitting…" : "Try again"}
+          </Button>
+        </div>
       ) : null}
 
       {confirming ? (
@@ -506,7 +752,9 @@ export function QuizFlow({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between gap-3">
+      {/* Sticky rather than fixed: it keeps its place in the flow, so it can
+          never sit on top of the answers or the feedback panel. */}
+      <div className="sticky bottom-0 z-10 flex items-center justify-between gap-3 border-t border-line bg-bg pt-3 pb-safe">
         <Button variant="secondary" onClick={() => go(-1)} disabled={index === 0 || pending}>
           Previous
         </Button>

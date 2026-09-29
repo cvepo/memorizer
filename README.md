@@ -3,13 +3,17 @@
 Turn a spreadsheet of questions into repeated multiple-choice practice.
 
 Import a `.csv` or `.xlsx`, and Memorizer works out which columns are which, generates
-plausible wrong answers for questions that only came with a correct one, and drills you
-until each question has been answered correctly twice. Flashcards, an adaptive Learn mode
-and generated quizzes all read from the same deck.
+plausible wrong answers for questions that only came with a correct one, and drills you in a
+small rolling pool until every question is mastered. Flashcards, an adaptive Learn mode and
+generated quizzes all read from the same deck.
 
 **Next.js 16 (App Router) · TypeScript · Tailwind v4 · Supabase Postgres · Vercel**
 
 ## What is interesting here
+
+- **The deck page is the study surface.** Opening a deck lands you on an interactive
+  flashcard, not a statistics panel. Modes, card controls and review shortcuts sit around it;
+  progress lives below.
 
 - **Forgiving import.** Column detection handles the full MCQ layout, a bare
   `Question | Answer` pair, and answer keys that point at a choice by letter
@@ -269,19 +273,60 @@ supabase/schema.sql          the database
 samples/                     example spreadsheets
 ```
 
+## Durable saving
+
+Answers are never trusted to a single request.
+
+Every graded answer gets an id generated in the browser and is written to `localStorage`
+*before* anything is sent. A queue drains oldest-first, retries with exponential backoff,
+retries again on `online`, and survives a refresh. The server insert is keyed on that id, so
+replaying the queue is harmless — an answer counts exactly once however many times it is sent.
+
+The UI says which of those states it is in: `Saving…`, `Saved`,
+`Offline · 3 answers waiting to sync`, or `Couldn't save · Retry`. If the browser blocks
+storage entirely, it says so rather than pretending.
+
+Quizzes get the same treatment from the other end. A draft — questions and their order,
+choices and *their* order, selections, position, settings — is written as you go, so a refresh
+or a closed tab restores the attempt exactly. The attempt id is minted when the quiz starts, so
+resubmitting after a failed request updates that attempt instead of creating a second one.
+
+## Needs review and stars
+
+**Needs review** is derived, not stored: a question qualifies once it has two or more incorrect
+graded answers and is not currently Mastered. Mastering it drops it off the list while keeping
+the mistake history, and a later miss brings it straight back — no flag table to fall out of
+sync. Flashcard reveals, unanswered quiz items and network retries never count.
+
+**Stars** are manual and independent: mastering a question, or resolving its automatic flag,
+never removes its star. They persist per profile, work from Flashcards, Learn and quiz review,
+and collect into a cross-deck `/starred` view that can launch a focused session per deck —
+including questions already mastered, which re-enter one level below Mastered so a single
+correct answer clears them again.
+
+## Study activity
+
+"Continue studying" and "Recent decks" are driven by a `study_activity` table that records only
+real study: revealing or advancing a flashcard, answering in Learn, choosing a quiz answer.
+Importing questions or editing a deck does not make it look studied. Browsing flashcards
+updates activity and card position but never mastery, accuracy or answer totals.
+
 ## Theming
 
-Dark only, Discord-inspired: `#313338` page, `#2B2D31` cards, blurple for primary actions,
-green and red reserved for correct and incorrect.
+Light, dark and system, from one set of semantic tokens.
+
+Dark is Discord-inspired: `#313338` page, `#2B2D31` cards, blurple for primary actions, green
+and red reserved for correct and incorrect. Light is the same system in a bright key —
+off-white page, white cards, dark text, restrained borders — keeping the identical blurple so
+the app reads the same either way.
+
+Resolution order: dark by default, the system preference moves to light unless dark was
+pinned, and an explicit choice always wins. A small inline script in the document head applies
+the stored choice before first paint, so there is no flash of the wrong palette.
 
 Every colour is a CSS variable in `app/globals.css` exposed as a Tailwind token —
 `bg-surface`, `text-muted`, `bg-accent`, `text-success`, `tint-danger`. No component
-hard-codes a hex value, so the palette is swappable from one file.
-
-A light palette is still defined under `:root[data-theme="light"]` but nothing sets that
-attribute and no toggle ships. To bring it back: restore a toggle component that sets
-`data-theme`, render it in `Nav` and on the login page, and re-add the `prefers-color-scheme`
-block in `globals.css`.
+hard-codes a hex value, so both themes stay in step from one file.
 
 ## Scripts
 

@@ -41,5 +41,13 @@ export default async function QuizPage({ params }: PageProps<"/decks/[deckId]/qu
     );
   }
 
-  return <QuizFlow deckId={deckId} deckName={deck.name} questions={questions} topics={topics} />;
+  return (
+    <QuizFlow
+      profileId={session.profileId}
+      deckId={deckId}
+      deckName={deck.name}
+      questions={questions}
+      topics={topics}
+    />
+  );
 }

@@ -4,10 +4,13 @@ import { supabase } from "@/lib/supabase";
 import type {
   Course,
   Deck,
+  DeckReviewCounts,
   DeckStats,
   Profile,
+  QuestionSummary,
   QuizAnswer,
   QuizAttempt,
+  StudyActivity,
   StudyQuestion,
   TopicStats,
 } from "@/lib/types";
@@ -247,4 +250,116 @@ export async function search(term: string): Promise<SearchResults> {
     })),
     questions: (questions.data ?? []) as SearchResults["questions"],
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Review flags, stars and question browsing
+// ---------------------------------------------------------------------------
+
+/** A question needs review once it has been answered wrong twice and is not
+ *  currently mastered. Derived rather than stored, so it self-resolves. */
+export const NEEDS_REVIEW_THRESHOLD = 2;
+
+export function needsReview(q: Pick<QuestionSummary, "times_incorrect" | "mastery_count">): boolean {
+  return q.times_incorrect >= NEEDS_REVIEW_THRESHOLD && q.mastery_count < 3;
+}
+
+export async function reviewCountsByDeck(profileId: string): Promise<Map<string, DeckReviewCounts>> {
+  const { data, error } = await supabase().rpc("deck_review_counts", { p_profile_id: profileId });
+  if (error) throw new Error(error.message);
+  return new Map((data ?? []).map((row) => [row.deck_id, row]));
+}
+
+type RawSummary = {
+  id: string;
+  deck_id: string;
+  question_text: string;
+  correct_answer: string;
+  topic: string | null;
+  position: number;
+  question_progress: { times_incorrect: number; mastery_count: number; times_seen: number }[] | null;
+  starred_questions: { question_id: string }[] | null;
+};
+
+const toSummary = (row: RawSummary): QuestionSummary => ({
+  id: row.id,
+  deck_id: row.deck_id,
+  question_text: row.question_text,
+  correct_answer: row.correct_answer,
+  topic: row.topic,
+  position: row.position,
+  times_incorrect: row.question_progress?.[0]?.times_incorrect ?? 0,
+  mastery_count: row.question_progress?.[0]?.mastery_count ?? 0,
+  times_seen: row.question_progress?.[0]?.times_seen ?? 0,
+  starred: (row.starred_questions?.length ?? 0) > 0,
+});
+
+const SUMMARY_SELECT = `id, deck_id, question_text, correct_answer, topic, position,
+   question_progress(times_incorrect, mastery_count, times_seen),
+   starred_questions(question_id)`;
+
+/** Every question in a deck with this profile's progress and star state. */
+export async function listDeckQuestions(deckId: string, profileId: string): Promise<QuestionSummary[]> {
+  const { data, error } = await supabase()
+    .from("questions")
+    .select(SUMMARY_SELECT)
+    .eq("deck_id", deckId)
+    .eq("question_progress.profile_id", profileId)
+    .eq("starred_questions.profile_id", profileId)
+    .order("position")
+    .order("created_at");
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as unknown as RawSummary[]).map(toSummary);
+}
+
+/** Starred questions across every deck, newest star first. */
+export async function listStarredEverywhere(
+  profileId: string,
+): Promise<(QuestionSummary & { deck: Deck | null; course: Course | null })[]> {
+  const { data, error } = await supabase()
+    .from("starred_questions")
+    .select(
+      `created_at,
+       question:questions(${SUMMARY_SELECT}, deck:decks(*, course:courses(*)))`,
+    )
+    .eq("profile_id", profileId)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+
+  type Row = {
+    question:
+      | (RawSummary & { deck: (Deck & { course: Course | null }) | null })
+      | null;
+  };
+
+  return ((data ?? []) as unknown as Row[])
+    .filter((row) => row.question !== null)
+    .map((row) => {
+      const q = row.question!;
+      const { deck, ...rest } = q;
+      return {
+        ...toSummary({ ...rest, starred_questions: [{ question_id: q.id }] }),
+        starred: true,
+        deck: deck ? ({ ...deck, course: undefined } as unknown as Deck) : null,
+        course: deck?.course ?? null,
+      };
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Study activity
+// ---------------------------------------------------------------------------
+
+/** Decks this profile has actually studied, most recent first. */
+export async function recentStudyActivity(profileId: string, limit = 10): Promise<StudyActivity[]> {
+  const data = unwrap(
+    await supabase()
+      .from("study_activity")
+      .select("*")
+      .eq("profile_id", profileId)
+      .order("last_studied_at", { ascending: false })
+      .limit(limit),
+  );
+  return (data ?? []) as StudyActivity[];
 }

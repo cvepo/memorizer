@@ -2,14 +2,20 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { DeckAdmin } from "@/app/(app)/decks/[deckId]/DeckAdmin";
-import { ButtonLink, Card, PageHeader, ProgressBar, Stat, buttonClass } from "@/components/ui";
+import { DeckStudy } from "@/app/(app)/decks/[deckId]/DeckStudy";
+import { ModeTabs } from "@/components/ModeTabs";
+import { ButtonLink, Card, EmptyState, ProgressBar } from "@/components/ui";
 import { getSession } from "@/lib/auth";
 import {
   accuracy,
   deckStatsByDeck,
   emptyStats,
   getDeck,
+  getStudyQuestions,
+  listDeckQuestions,
   listQuizAttempts,
+  needsReview,
+  reviewCountsByDeck,
   topicStats,
 } from "@/lib/data";
 
@@ -28,85 +34,128 @@ export default async function DeckPage({ params }: PageProps<"/decks/[deckId]">)
   const deck = await getDeck(deckId);
   if (!deck) notFound();
 
-  const [statsMap, topics, attempts] = await Promise.all([
+  const [questions, statsMap, topics, attempts, reviewCounts, summaries] = await Promise.all([
+    getStudyQuestions(deckId, session.profileId),
     deckStatsByDeck(session.profileId),
     topicStats(deckId, session.profileId),
     listQuizAttempts(deckId, session.profileId),
+    reviewCountsByDeck(session.profileId),
+    listDeckQuestions(deckId, session.profileId),
   ]);
 
   const stats = statsMap.get(deckId) ?? emptyStats(deckId);
   const deckAccuracy = accuracy(stats);
   const isAdmin = session.role === "admin";
-  const hasQuestions = stats.total_questions > 0;
   const showTopics = topics.length > 1 || (topics.length === 1 && topics[0].topic !== "Untagged");
 
+  const total = summaries.length;
+  const started = summaries.filter((q) => q.times_seen > 0).length;
+  const mastered = summaries.filter((q) => q.mastery_count >= 3).length;
+  const counts = reviewCounts.get(deckId);
+  const starredIds = summaries.filter((q) => q.starred).map((q) => q.id);
+  const needsReviewIds = summaries.filter(needsReview).map((q) => q.id);
+
   return (
-    <div className="space-y-6">
-      {deck.course ? (
-        <Link
-          href={`/courses/${deck.course.id}`}
-          className="inline-block text-sm text-muted transition-colors duration-150 hover:text-ink"
-        >
-          ← {deck.course.name}
-        </Link>
-      ) : null}
+    <div className="mx-auto w-full max-w-5xl space-y-6">
+      <div className="space-y-3">
+        {deck.course ? (
+          <Link
+            href={`/courses/${deck.course.id}`}
+            className="inline-flex min-h-8 items-center text-sm text-muted transition-colors duration-150 hover:text-ink"
+          >
+            ← {deck.course.name}
+          </Link>
+        ) : null}
 
-      <PageHeader title={deck.name} subtitle={deck.description} />
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{deck.name}</h1>
+            <p className="mt-1 text-sm tabular-nums text-muted">
+              {questions.length} {questions.length === 1 ? "question" : "questions"}
+            </p>
+            {deck.description ? (
+              <p className="mt-1 max-w-prose text-sm text-muted">{deck.description}</p>
+            ) : null}
+          </div>
 
-      <Card className="space-y-5">
-        <div>
-          <p className="text-3xl font-semibold tabular-nums">{stats.total_questions}</p>
-          <p className="text-xs text-muted">
-            {stats.total_questions === 1 ? "question" : "questions"} in this deck
-          </p>
-        </div>
-
-        <ProgressBar value={stats.mastered} total={stats.total_questions} />
-
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <Stat label="Mastered" value={stats.mastered} tone="success" />
-          <Stat label="Learning" value={stats.learning} tone="accent" />
-          <Stat label="Unseen" value={stats.unseen} tone="muted" />
-          <Stat label="Accuracy" value={deckAccuracy === null ? "—" : `${deckAccuracy}%`} />
-          <Stat label="Answers submitted" value={stats.total_answers} />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {hasQuestions ? (
-            <>
-              <ButtonLink href={`/decks/${deck.id}/flashcards`} variant="secondary" size="lg">
-                Flashcards
-              </ButtonLink>
-              <ButtonLink href={`/decks/${deck.id}/learn`} variant="primary" size="lg">
-                Learn
-              </ButtonLink>
-              <ButtonLink href={`/decks/${deck.id}/quiz`} variant="secondary" size="lg">
-                Quiz
-              </ButtonLink>
-            </>
-          ) : (
-            <>
-              <span className={buttonClass("secondary", "lg", "opacity-50 pointer-events-none")}>
-                Flashcards
-              </span>
-              <span className={buttonClass("secondary", "lg", "opacity-50 pointer-events-none")}>
-                Learn
-              </span>
-              <span className={buttonClass("secondary", "lg", "opacity-50 pointer-events-none")}>
-                Quiz
-              </span>
-            </>
-          )}
+          {/* Deck settings and deletion stay out of the study surface; open, the
+              disclosure takes the full row instead of squeezing beside the title. */}
           {isAdmin ? (
-            <ButtonLink href={`/decks/${deck.id}/edit`} variant="ghost" size="lg">
-              Edit deck
-            </ButtonLink>
+            <details className="w-full sm:w-auto [&[open]]:w-full">
+              <summary className="inline-flex min-h-11 cursor-pointer list-none items-center [&::-webkit-details-marker]:hidden rounded-xl border border-line-strong bg-surface px-4 text-sm font-medium transition-colors duration-150 hover:bg-surface-2">
+                Manage deck
+              </summary>
+              <div className="mt-3 space-y-3">
+                <DeckAdmin deck={deck} />
+                <ButtonLink href={`/decks/${deck.id}/edit`} variant="secondary">
+                  Edit questions
+                </ButtonLink>
+              </div>
+            </details>
           ) : null}
         </div>
+      </div>
 
-        {hasQuestions ? null : (
-          <p className="text-sm text-muted">Import or add questions before studying.</p>
+      <ModeTabs deckId={deck.id} active="flashcards" disabled={questions.length === 0} />
+
+      {questions.length === 0 ? (
+        <EmptyState
+          title="No questions yet"
+          description={
+            isAdmin
+              ? "Add or import questions and this deck opens straight onto a flashcard."
+              : "This deck has nothing to study yet. Check back once questions have been added."
+          }
+          action={
+            isAdmin ? (
+              <ButtonLink href={`/decks/${deck.id}/edit`}>Add questions</ButtonLink>
+            ) : undefined
+          }
+        />
+      ) : (
+        <DeckStudy
+          deckId={deck.id}
+          deckName={deck.name}
+          questions={questions}
+          starredIds={starredIds}
+          needsReviewIds={needsReviewIds}
+          profileId={session.profileId}
+        />
+      )}
+
+      <Card className="space-y-3">
+        <h2 className="font-medium">Learning progress</h2>
+
+        {stats.total_answers === 0 ? (
+          <p className="text-sm text-muted">Use Learn or Quiz to build your learning progress.</p>
+        ) : (
+          <>
+            <p className="text-sm">
+              <span className="tabular-nums">{started}</span>{" "}
+              {started === 1 ? "question" : "questions"} started ·{" "}
+              <span className="tabular-nums">{total - started}</span> not yet studied
+            </p>
+            <div className="space-y-1.5">
+              <p className="text-sm">
+                Mastery — <span className="tabular-nums">{mastered}</span> of{" "}
+                <span className="tabular-nums">{total}</span>
+              </p>
+              <ProgressBar value={mastered} total={total} />
+            </div>
+            <p className="text-sm">
+              <span className="tabular-nums">{deckAccuracy ?? 0}%</span> accuracy across{" "}
+              <span className="tabular-nums">{stats.total_answers}</span>{" "}
+              {stats.total_answers === 1 ? "answer" : "answers"}
+            </p>
+          </>
         )}
+
+        {counts && (counts.needs_review > 0 || counts.starred > 0) ? (
+          <p className="text-sm text-muted">
+            <span className="tabular-nums">{counts.needs_review}</span> to review ·{" "}
+            <span className="tabular-nums">{counts.starred}</span> starred
+          </p>
+        ) : null}
       </Card>
 
       {showTopics ? (
@@ -175,8 +224,6 @@ export default async function DeckPage({ params }: PageProps<"/decks/[deckId]">)
           </ul>
         </Card>
       ) : null}
-
-      {isAdmin ? <DeckAdmin deck={deck} /> : null}
     </div>
   );
 }

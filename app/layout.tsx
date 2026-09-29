@@ -13,13 +13,28 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  colorScheme: "dark",
-  themeColor: "#313338",
+  viewportFit: "cover",
+  colorScheme: "dark light",
 };
+
+/**
+ * Applies the stored theme before first paint. Without this the page renders in
+ * the system palette and then snaps to the chosen one, which is a visible flash
+ * on every navigation.
+ */
+const themeScript = `
+try {
+  var t = localStorage.getItem("memorizer-theme");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+} catch (e) {}
+`;
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${geistSans.variable} h-full`}>
+    <html lang="en" className={`${geistSans.variable} h-full`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="flex min-h-full flex-col">{children}</body>
     </html>
   );

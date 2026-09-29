@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { ButtonLink, EmptyState, PageHeader } from "@/components/ui";
 import { getSession } from "@/lib/auth";
-import { getDeck, getStudyQuestions } from "@/lib/data";
+import { getDeck, getStudyQuestions, listDeckQuestions } from "@/lib/data";
 import type { StudyQuestion } from "@/lib/types";
 
 import { LearnSession } from "./LearnSession";
@@ -28,7 +28,11 @@ export default async function LearnPage({ params, searchParams }: PageProps<"/de
   const deck = await getDeck(deckId);
   if (!deck) notFound();
 
-  const questions = await getStudyQuestions(deckId, session.profileId);
+  const [questions, summaries] = await Promise.all([
+    getStudyQuestions(deckId, session.profileId),
+    listDeckQuestions(deckId, session.profileId),
+  ]);
+  const starredIds = summaries.filter((summary) => summary.starred).map((summary) => summary.id);
 
   const ids = firstValue(sp.ids);
   const only = firstValue(sp.only);
@@ -66,5 +70,14 @@ export default async function LearnPage({ params, searchParams }: PageProps<"/de
     );
   }
 
-  return <LearnSession deckId={deckId} deckName={deck.name} questions={filtered} />;
+  return (
+    <LearnSession
+      deckId={deckId}
+      deckName={deck.name}
+      questions={filtered}
+      profileId={session.profileId}
+      starredIds={starredIds}
+      focusedReview={Boolean(ids)}
+    />
+  );
 }

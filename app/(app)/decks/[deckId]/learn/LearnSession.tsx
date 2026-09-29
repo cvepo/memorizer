@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { MCQOption, OPTION_LABELS, type OptionState } from "@/components/MCQOption";
 import { Mascot, type MascotState } from "@/components/Mascot";
 import { RangeSlider } from "@/components/RangeSlider";
+import { SaveStatus } from "@/components/SaveStatus";
+import { StarButton } from "@/components/StarButton";
 import { Button, ButtonLink, Card, ProgressBar, Stat, cn } from "@/components/ui";
-import { recordAnswer } from "@/lib/actions/study";
+import { recordAnswers } from "@/lib/actions/study";
+import { AnswerQueue, newEventId, type QueueStatus } from "@/lib/answerQueue";
 import { generateChoices, maxAvailableChoices, type Choice } from "@/lib/distractors";
 import {
   CHECKPOINT_LIMITS,
@@ -32,6 +35,8 @@ const KEY_TO_INDEX: Record<string, number | undefined> = {
 const AUTO_ADVANCE_MS = 700;
 const CELEBRATION_STREAK = 5;
 const RANGE_STORAGE_KEY = "memorizer-checkpoint-range";
+/** Stable reference so `useSyncExternalStore` does not loop before the queue exists. */
+const IDLE_SAVE: QueueStatus = { kind: "idle" };
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -54,9 +59,9 @@ function readStoredRange(): CheckpointRange | null {
 }
 
 /** Small coloured tally of how the deck is spread across the four levels. */
-function LevelCounts({ counts }: { counts: Counts }) {
+function LevelCounts({ counts, className }: { counts: Counts; className?: string }) {
   return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+    <div className={cn("flex flex-wrap gap-x-4 gap-y-1 text-sm", className)}>
       <span className="text-success tabular-nums">{counts.mastered} mastered</span>
       <span className="text-accent tabular-nums">{counts.familiar} familiar</span>
       <span className="text-ink tabular-nums">{counts.learning} learning</span>
@@ -69,15 +74,37 @@ export function LearnSession({
   deckId,
   deckName,
   questions,
+  profileId,
+  starredIds,
+  focusedReview = false,
 }: {
   deckId: string;
   deckName: string;
   questions: StudyQuestion[];
+  profileId: string;
+  starredIds: string[];
+  /** The caller picked these questions by id, so already-mastered ones belong in the pool. */
+  focusedReview?: boolean;
 }) {
   const byId = useMemo(() => new Map(questions.map((q) => [q.id, q])), [questions]);
 
+  // A focused review is explicitly about this handful of questions, so a
+  // Mastered one is seeded a level short and rejoins the pool: one correct
+  // answer clears it again. Only the seed is lowered — stored mastery is
+  // untouched unless the question is actually missed.
+  const seedQuestions = useMemo(() => {
+    if (!focusedReview) return questions;
+    return questions.map((question) => {
+      const progress = question.progress;
+      if (!progress || progress.mastery_count < MASTERY_MASTERED) return question;
+      return { ...question, progress: { ...progress, mastery_count: MASTERY_MASTERED - 1 } };
+    });
+  }, [focusedReview, questions]);
+
   const [ready, setReady] = useState(false);
   const startedRef = useRef(false);
+  const queueRef = useRef<AnswerQueue | null>(null);
+  const [starred, setStarred] = useState<Set<string>>(() => new Set(starredIds));
   const [range, setRange] = useState<CheckpointRange>(DEFAULT_CHECKPOINT_RANGE);
   const [state, setState] = useState<LearnState | null>(null);
 
@@ -86,7 +113,6 @@ export function LearnSession({
   const [wasCorrect, setWasCorrect] = useState<boolean | null>(null);
   const [presentation, setPresentation] = useState(0);
   const [presented, setPresented] = useState<{ key: string; choices: Choice[] } | null>(null);
-  const [saveFailedFor, setSaveFailedFor] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   /** Counts captured when a checkpoint fired, so the panel is a snapshot. */
   const [checkpointCounts, setCheckpointCounts] = useState<Counts | null>(null);
@@ -96,12 +122,51 @@ export function LearnSession({
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+    const queue = new AnswerQueue(profileId, (answers) => recordAnswers(answers, "learn"));
+    queueRef.current = queue;
+    // Answers stored before a refresh or a crash are still owed to the server.
+    if (queue.pendingCount > 0) void queue.flush();
+
     const saved = readStoredRange();
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (saved) setRange(saved);
-    setState(createLearnState(questions, saved ?? DEFAULT_CHECKPOINT_RANGE));
+    setState(createLearnState(seedQuestions, saved ?? DEFAULT_CHECKPOINT_RANGE));
     setReady(true);
-  }, [questions]);
+  }, [seedQuestions, profileId]);
+
+  useEffect(
+    () => () => {
+      queueRef.current?.destroy();
+      queueRef.current = null;
+    },
+    [],
+  );
+
+  // The queue only exists after mount, so the subscription is re-established
+  // once `ready` flips rather than latching onto nothing.
+  const subscribeSave = useCallback(
+    (onChange: () => void) => {
+      const queue = ready ? queueRef.current : null;
+      if (!queue) return () => {};
+      return queue.subscribe(onChange);
+    },
+    [ready],
+  );
+  const readSaveStatus = useCallback(
+    () => (ready ? queueRef.current?.getStatus() ?? IDLE_SAVE : IDLE_SAVE),
+    [ready],
+  );
+  const saveStatus = useSyncExternalStore(subscribeSave, readSaveStatus, () => IDLE_SAVE);
+  const retrySave = useCallback(() => queueRef.current?.retry(), []);
+
+  const toggleStar = useCallback((questionId: string, next: boolean) => {
+    setStarred((previous) => {
+      const updated = new Set(previous);
+      if (next) updated.add(questionId);
+      else updated.delete(questionId);
+      return updated;
+    });
+  }, []);
 
   const currentId = state?.current ?? null;
   const question = currentId ? byId.get(currentId) ?? null : null;
@@ -141,16 +206,14 @@ export function LearnSession({
   const grade = useCallback(
     (choice: Choice) => {
       if (phase !== "answering" || !question) return;
-      const questionId = question.id;
       setSelected(choice.text);
       setWasCorrect(choice.isCorrect);
       setPhase("feedback");
-      startTransition(async () => {
-        try {
-          await recordAnswer(questionId, choice.isCorrect);
-        } catch {
-          setSaveFailedFor(questionId);
-        }
+      // Returns immediately: the queue owns durability, the UI never waits.
+      queueRef.current?.enqueue({
+        eventId: newEventId(),
+        questionId: question.id,
+        wasCorrect: choice.isCorrect,
       });
     },
     [phase, question],
@@ -173,17 +236,16 @@ export function LearnSession({
     setPresentation((n) => n + 1);
     setSelected(null);
     setWasCorrect(null);
-    setSaveFailedFor(null);
   }, [phase, question, wasCorrect, state, questions]);
 
   const restart = useCallback(() => {
-    setState(createLearnState(questions, range));
+    setState(createLearnState(seedQuestions, range));
     setPhase("answering");
     setSelected(null);
     setWasCorrect(null);
     setCheckpointCounts(null);
     setPresentation((n) => n + 1);
-  }, [questions, range]);
+  }, [seedQuestions, range]);
 
   // A correct answer with nothing to read moves on by itself. Misses wait.
   useEffect(() => {
@@ -369,7 +431,10 @@ export function LearnSession({
             ) : null}
           </div>
 
-          <p className="text-xs text-muted">Your progress is saved as you go.</p>
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+            <p className="text-xs text-muted">Your progress is saved as you go.</p>
+            <SaveStatus status={saveStatus} onRetry={retrySave} />
+          </div>
         </Card>
       </div>
     );
@@ -417,10 +482,18 @@ export function LearnSession({
     <div className="space-y-6">
       {breadcrumb}
 
-      <div className="sticky top-14 z-10 -mx-4 space-y-2 border-b border-line bg-bg px-4 pb-3 pt-2">
+      {focusedReview ? (
+        <p className="text-sm text-muted">
+          Focused review — only these questions, including ones you have already mastered.
+        </p>
+      ) : null}
+
+      <div className="sticky top-14 z-10 -mx-4 space-y-2 border-b border-line bg-bg px-4 pb-3 pt-2 sm:-mx-6 sm:px-6">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          <LevelCounts counts={counts} />
-          <div className="flex items-center gap-2">
+          {/* The four-level breakdown is detail, not navigation: on a phone the
+              header keeps mastered/total and the streak instead. */}
+          <LevelCounts counts={counts} className="hidden sm:flex" />
+          <div className="ml-auto flex items-center gap-2">
             <Mascot state={mascotState} size="sm" replayKey={state.answered} />
             <span
               className={cn(
@@ -437,25 +510,39 @@ export function LearnSession({
           </div>
         </div>
         <ProgressBar value={counts.mastered} total={counts.total} />
-        <p className="text-sm tabular-nums text-muted">
-          {counts.mastered} / {counts.total} mastered
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <p className="text-sm tabular-nums text-muted">
+            {counts.mastered} / {counts.total} mastered
+          </p>
+          <SaveStatus status={saveStatus} onRetry={retrySave} />
+        </div>
       </div>
 
       <div className="space-y-5">
-        <div className="space-y-1.5">
-          <h2 className="text-xl font-medium leading-snug sm:text-2xl">{question.question_text}</h2>
-          <p className="text-xs text-muted">
-            {question.topic ? `${question.topic} · ` : ""}
-            {level === 0
-              ? "New question"
-              : `${MASTERY_MASTERED - level} more correct to master`}
-          </p>
-          {available < 4 ? (
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <h2 className="break-words text-xl font-medium leading-snug sm:text-2xl">
+              {question.question_text}
+            </h2>
             <p className="text-xs text-muted">
-              This deck can only produce {available} unique choices for this question.
+              {question.topic ? `${question.topic} · ` : ""}
+              {level === 0
+                ? "New question"
+                : `${MASTERY_MASTERED - level} more correct to master`}
             </p>
-          ) : null}
+            {available < 4 ? (
+              <p className="text-xs text-muted">
+                This deck can only produce {available} unique choices for this question.
+              </p>
+            ) : null}
+          </div>
+          <StarButton
+            key={question.id}
+            questionId={question.id}
+            starred={starred.has(question.id)}
+            size="sm"
+            onChange={(next) => toggleStar(question.id, next)}
+          />
         </div>
 
         <div className="space-y-3">
@@ -503,21 +590,29 @@ export function LearnSession({
                 </div>
               ) : null}
 
-              <div className="mt-4 flex flex-wrap items-center gap-3">
+              {/* On a phone Next lives in the bottom bar below, so it stays in
+                  reach without covering the options or this panel. */}
+              <div className="mt-4 hidden flex-wrap items-center gap-3 sm:flex">
                 <Button autoFocus onClick={advance}>
                   Next
                 </Button>
-                <span className="hidden text-xs text-muted sm:inline">
-                  Enter, Space or → to continue
-                </span>
-                {saveFailedFor === question.id ? (
-                  <span className="text-xs text-muted">Progress could not be saved.</span>
-                ) : null}
+                <span className="text-xs text-muted">Enter, Space or → to continue</span>
               </div>
             </div>
           ) : null}
         </div>
       </div>
+
+      {phase === "feedback" && wasCorrect !== null ? (
+        <>
+          <div aria-hidden className="h-24 sm:hidden" />
+          <div className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-bg px-4 pt-3 pb-safe sm:hidden">
+            <Button size="lg" className="w-full" onClick={advance}>
+              Next
+            </Button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
