@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MCQOption, OPTION_LABELS, type OptionState } from "@/components/MCQOption";
 import { RangeSlider } from "@/components/RangeSlider";
@@ -32,7 +32,7 @@ const KEY_TO_INDEX: Record<string, number | undefined> = {
 const AUTO_ADVANCE_MS = 700;
 const RANGE_STORAGE_KEY = "memorizer-round-range";
 
-type Stage = "setup" | "round" | "checkin" | "done";
+type Stage = "round" | "checkin" | "done";
 
 type Totals = {
   answered: number;
@@ -78,7 +78,11 @@ export function LearnSession({
   const byId = useMemo(() => new Map(questions.map((q) => [q.id, q])), [questions]);
 
   const [ready, setReady] = useState(false);
-  const [stage, setStage] = useState<Stage>("setup");
+  /** React re-runs mount effects in development; building the session twice
+   *  would discard the first round and start the learner on "Round 2". */
+  const startedRef = useRef(false);
+  const [stage, setStage] = useState<Stage>("round");
+  const [showRoundSettings, setShowRoundSettings] = useState(false);
   const [range, setRange] = useState<RoundRange>(DEFAULT_ROUND_RANGE);
 
   /** Mastery carried between rounds, seeded from what the database already knows. */
@@ -104,13 +108,6 @@ export function LearnSession({
 
   // Round selection shuffles, so nothing may run during render. The stored
   // round-length preference is read here too, for the same reason.
-  useEffect(() => {
-    const saved = readStoredRange();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (saved) setRange(saved);
-    setReady(true);
-  }, []);
-
   const currentId = state?.queue[0];
   const question = currentId ? byId.get(currentId) ?? null : null;
   const presentationKey = `${presentation}:${currentId ?? ""}`;
@@ -151,13 +148,18 @@ export function LearnSession({
   );
 
   const beginRound = useCallback(
-    (mastery: Record<string, number>, carriedStreak: number, carriedBest: number) => {
+    (
+      mastery: Record<string, number>,
+      carriedStreak: number,
+      carriedBest: number,
+      useRange: RoundRange = range,
+    ) => {
       const left = remainingCount(questions, mastery);
       if (left === 0) {
         setStage("done");
         return;
       }
-      const size = nextRoundSize(range, left);
+      const size = nextRoundSize(useRange, left);
       const picked = pickRoundQuestions(questions, mastery, size);
       const next = createLearnState(picked, mastery);
       next.streak = carriedStreak;
@@ -176,14 +178,29 @@ export function LearnSession({
     [questions, range],
   );
 
-  const startSession = useCallback(() => {
+  // Learn opens straight into the first round — no settings gate. The round
+  // length is remembered from last time and adjustable at any check-in.
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    const saved = readStoredRange();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (saved) setRange(saved);
+    setReady(true);
+    beginRound(sessionMastery, 0, 0, saved ?? DEFAULT_ROUND_RANGE);
+    // Mount only: re-running this would restart the session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const updateRange = useCallback((next: RoundRange) => {
+    setRange(next);
     try {
-      localStorage.setItem(RANGE_STORAGE_KEY, JSON.stringify(range));
+      localStorage.setItem(RANGE_STORAGE_KEY, JSON.stringify(next));
     } catch {
       // Preference just will not persist.
     }
-    beginRound(sessionMastery, 0, 0);
-  }, [beginRound, range, sessionMastery]);
+  }, []);
 
   const restartAll = useCallback(() => {
     const seed: Record<string, number> = {};
@@ -304,64 +321,6 @@ export function LearnSession({
     );
   }
 
-  if (stage === "setup") {
-    const estimatedRounds = Math.max(
-      1,
-      Math.round(questions.length / ((range.min + range.max) / 2)),
-    );
-    const fitsInOne = questions.length <= range.max;
-
-    return (
-      <div className="space-y-6">
-        {breadcrumb}
-        <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{deckName}</h1>
-          <p className="text-sm text-muted">
-            {questions.length} {questions.length === 1 ? "question" : "questions"} to work through.
-          </p>
-        </div>
-
-        <Card className="space-y-6">
-          <div className="space-y-1">
-            <h2 className="font-medium">Round length</h2>
-            <p className="text-sm text-muted">
-              Learn runs in rounds with a check-in between them, so a big deck does not become one
-              unbroken run. Each round picks a random length inside this range.
-            </p>
-          </div>
-
-          <RangeSlider
-            label="Questions per round"
-            min={ROUND_LIMITS.min}
-            max={ROUND_LIMITS.max}
-            value={range}
-            onChange={setRange}
-          />
-
-          <p className="text-sm text-muted">
-            {fitsInOne ? (
-              <>This deck fits in a single round.</>
-            ) : (
-              <>
-                Rounds of{" "}
-                <span className="text-ink tabular-nums">
-                  {range.min}–{range.max}
-                </span>{" "}
-                questions · roughly{" "}
-                <span className="text-ink tabular-nums">{estimatedRounds}</span> rounds to get
-                through everything once.
-              </>
-            )}
-          </p>
-
-          <Button size="lg" onClick={startSession} className="w-full sm:w-auto">
-            Start learning
-          </Button>
-        </Card>
-      </div>
-    );
-  }
-
   // ------------------------------------------------------------- finished ---
 
   if (stage === "done") {
@@ -462,6 +421,41 @@ export function LearnSession({
             <ButtonLink href={`/decks/${deckId}`} variant="ghost">
               Finish for now
             </ButtonLink>
+          </div>
+
+          <div className="border-t border-line pt-4 text-left">
+            <button
+              type="button"
+              onClick={() => setShowRoundSettings((v) => !v)}
+              aria-expanded={showRoundSettings}
+              className="flex w-full items-center justify-between gap-3 text-sm text-muted transition-colors hover:text-ink"
+            >
+              <span>
+                Round length ·{" "}
+                <span className="tabular-nums">
+                  {range.min}–{range.max}
+                </span>{" "}
+                questions
+              </span>
+              <span aria-hidden className="text-xs">
+                {showRoundSettings ? "Hide" : "Change"}
+              </span>
+            </button>
+
+            {showRoundSettings ? (
+              <div className="mt-4">
+                <RangeSlider
+                  label="Questions per round"
+                  min={ROUND_LIMITS.min}
+                  max={ROUND_LIMITS.max}
+                  value={range}
+                  onChange={updateRange}
+                />
+                <p className="mt-3 text-xs text-muted">
+                  Each round picks a random length inside this range. Applies from the next round.
+                </p>
+              </div>
+            ) : null}
           </div>
 
           <p className="text-xs text-muted">Your progress is saved as you go.</p>

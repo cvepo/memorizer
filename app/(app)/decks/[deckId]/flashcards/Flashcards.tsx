@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button, ButtonLink, Card, PageHeader, ProgressBar, cn } from "@/components/ui";
 import { shuffle } from "@/lib/distractors";
@@ -32,7 +32,32 @@ export function Flashcards({
   const byId = useMemo(() => new Map(questions.map((q) => [q.id, q])), [questions]);
   const current = byId.get(order[index]);
 
-  const flip = useCallback(() => setFlipped((value) => !value), []);
+  const cardRef = useRef<HTMLButtonElement>(null);
+
+  /**
+   * Turn the card over. The rotation itself is a CSS transition; the short
+   * scale dip is played here so the card reads as pulling back off the table
+   * mid-turn rather than pivoting in place. Replaying it on every flip is why
+   * it is an imperative animation rather than a class.
+   */
+  const flip = useCallback(() => {
+    setFlipped((value) => !value);
+
+    const el = cardRef.current;
+    if (!el || typeof el.animate !== "function") return;
+    const reduced =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    el.animate(
+      [
+        { transform: "scale(1)" },
+        { transform: `scale(${reduced ? 0.985 : 0.93})`, offset: 0.45 },
+        { transform: "scale(1)" },
+      ],
+      { duration: reduced ? 260 : 600, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+    );
+  }, []);
 
   const previous = useCallback(() => {
     setIndex((i) => Math.max(0, i - 1));
@@ -115,14 +140,17 @@ export function Flashcards({
           otherwise the rotation is orthographic and reads as a squash rather
           than a card turning over. */}
       <button
+        ref={cardRef}
         type="button"
         onClick={flip}
         aria-label={flipped ? "Show the question" : "Show the answer"}
-        className="block w-full rounded-2xl [perspective:1200px]"
+        className="block w-full rounded-2xl [perspective:900px]"
       >
         <div
+          data-motion="essential"
           className={cn(
-            "relative min-h-64 transition-transform duration-500 ease-in-out will-change-transform",
+            "relative min-h-64 transition-transform duration-[600ms] will-change-transform",
+            "[transition-timing-function:cubic-bezier(0.4,0,0.2,1)]",
             "[transform-style:preserve-3d] sm:min-h-80",
             flipped && "[transform:rotateY(180deg)]",
           )}

@@ -103,11 +103,20 @@ body {
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
+/* Honour "Reduce Motion" for incidental movement — hovers, slides, anything
+   decorative. Motion that carries meaning is exempt: a flashcard turning over
+   is the feedback that you flipped it, and removing it entirely leaves the
+   card silently swapping its text. Those elements opt in with
+   data-motion="essential" and get a shorter, smaller version instead. */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *:not([data-motion="essential"]),
+  *:not([data-motion="essential"])::before,
+  *:not([data-motion="essential"])::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+
+  [data-motion="essential"] {
+    transition-duration: 260ms !important;
   }
 }
