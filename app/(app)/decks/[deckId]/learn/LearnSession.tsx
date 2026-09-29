@@ -197,13 +197,25 @@ export function LearnSession({
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (isTypingTarget(event.target)) return;
 
+      // Enter, Space or the right arrow all move on. The arrow matters most
+      // after a miss, where the feedback panel is worth reading first and
+      // reaching for Enter means leaving the arrow keys.
       if (phase === "feedback") {
-        if (event.key === "Enter" || event.key === " ") {
+        if (event.key === "Enter" || event.key === " " || event.key === "ArrowRight") {
           event.preventDefault();
           advance();
         }
         return;
       }
+
+      if (phase === "checkpoint") {
+        if (event.key === "Enter" || event.key === " " || event.key === "ArrowRight") {
+          event.preventDefault();
+          setPhase("answering");
+        }
+        return;
+      }
+
       if (phase !== "answering") return;
 
       const index = KEY_TO_INDEX[event.key.toLowerCase()];
@@ -495,6 +507,9 @@ export function LearnSession({
                 <Button autoFocus onClick={advance}>
                   Next
                 </Button>
+                <span className="hidden text-xs text-muted sm:inline">
+                  Enter, Space or → to continue
+                </span>
                 {saveFailedFor === question.id ? (
                   <span className="text-xs text-muted">Progress could not be saved.</span>
                 ) : null}
