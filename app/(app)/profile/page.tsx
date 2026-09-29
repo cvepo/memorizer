@@ -4,7 +4,7 @@ import { getSession } from "@/lib/auth";
 import { listProfiles } from "@/lib/data";
 import { redirect } from "next/navigation";
 
-export const metadata = { title: "Profile · BIOMI Study" };
+export const metadata = { title: "Profile · Memorizer" };
 
 export default async function ProfilePage() {
   const session = await getSession();

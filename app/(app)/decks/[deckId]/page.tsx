@@ -16,7 +16,7 @@ import {
 export async function generateMetadata({ params }: PageProps<"/decks/[deckId]">) {
   const { deckId } = await params;
   const deck = await getDeck(deckId);
-  return { title: deck ? `${deck.name} · BIOMI Study` : "Deck · BIOMI Study" };
+  return { title: deck ? `${deck.name} · Memorizer` : "Deck · Memorizer" };
 }
 
 export default async function DeckPage({ params }: PageProps<"/decks/[deckId]">) {

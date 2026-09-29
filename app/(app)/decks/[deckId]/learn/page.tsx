@@ -15,7 +15,7 @@ function firstValue(value: string | string[] | undefined): string | null {
 export async function generateMetadata({ params }: PageProps<"/decks/[deckId]/learn">) {
   const { deckId } = await params;
   const deck = await getDeck(deckId);
-  return { title: deck ? `Learn · ${deck.name}` : "Learn · BIOMI Study" };
+  return { title: deck ? `Learn · ${deck.name}` : "Learn · Memorizer" };
 }
 
 export default async function LearnPage({ params, searchParams }: PageProps<"/decks/[deckId]/learn">) {

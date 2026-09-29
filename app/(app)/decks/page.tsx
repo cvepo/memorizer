@@ -5,7 +5,7 @@ import { ButtonLink, EmptyState, PageHeader } from "@/components/ui";
 import { getSession } from "@/lib/auth";
 import { deckStatsByDeck, emptyStats, listDecksWithCourse } from "@/lib/data";
 
-export const metadata = { title: "Decks · BIOMI Study" };
+export const metadata = { title: "Decks · Memorizer" };
 
 export default async function DecksPage() {
   const session = await getSession();

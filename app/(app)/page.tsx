@@ -6,7 +6,7 @@ import { DeckCard } from "@/components/DeckCard";
 import { getSession } from "@/lib/auth";
 import { deckStatsByDeck, emptyStats, listCourses, listDecksWithCourse } from "@/lib/data";
 
-export const metadata = { title: "Study · BIOMI Study" };
+export const metadata = { title: "Study · Memorizer" };
 
 export default async function HomePage() {
   const session = await getSession();

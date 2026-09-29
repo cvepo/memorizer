@@ -8,7 +8,7 @@ import { getDeck, getDeckTopics, getStudyQuestions } from "@/lib/data";
 export async function generateMetadata({ params }: PageProps<"/decks/[deckId]/edit">) {
   const { deckId } = await params;
   const deck = await getDeck(deckId);
-  return { title: deck ? `Edit · ${deck.name}` : "Edit deck · BIOMI Study" };
+  return { title: deck ? `Edit · ${deck.name}` : "Edit deck · Memorizer" };
 }
 
 export default async function DeckEditPage({ params }: PageProps<"/decks/[deckId]/edit">) {

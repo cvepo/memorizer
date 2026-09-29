@@ -15,7 +15,7 @@ export function CourseCreateForm() {
       <h2 className="font-medium">New course</h2>
       <form action={action} className="space-y-4">
         <Field label="Name">
-          <Input name="name" required placeholder="BIOMI 2900" />
+          <Input name="name" required placeholder="e.g. Biology 101" />
         </Field>
         <Field label="Description">
           <Textarea name="description" placeholder="Optional summary" />

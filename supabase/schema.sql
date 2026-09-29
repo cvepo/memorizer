@@ -1,5 +1,5 @@
 -- ============================================================================
--- BIOMI Study App — Supabase schema
+-- Memorizer — Supabase schema
 -- Run this once in the Supabase SQL Editor (Dashboard -> SQL Editor -> New query).
 -- Safe to re-run: every statement is idempotent.
 -- ============================================================================

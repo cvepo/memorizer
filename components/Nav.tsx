@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { Badge, cn } from "@/components/ui";
 import { signOut } from "@/lib/actions/auth";
 
@@ -28,7 +27,7 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
     <header className="sticky top-0 z-20 border-b border-line bg-bg/90 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-5xl items-center gap-3 px-4">
         <Link href="/" className="font-semibold tracking-tight">
-          BIOMI Study
+          Memorizer
         </Link>
 
         <nav className="ml-2 hidden items-center gap-1 sm:flex">
@@ -47,7 +46,6 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
-          <ThemeToggle />
           <div className="hidden items-center gap-2 sm:flex">
             <Link href="/profile" className="text-sm text-muted hover:text-ink" title="Switch profile">
               {profileName}

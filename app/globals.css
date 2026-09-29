@@ -1,10 +1,36 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
-   Light mode — the palette from the PRD.
-   Cream dominates; rose and sage are accents, never large surfaces.
+   Dark only, for now. The palette is Discord-inspired: neutral dark surfaces,
+   blurple reserved for primary actions and active state, green and red used
+   only for correct and incorrect.
+
+   A light palette lives below under [data-theme="light"] but nothing sets that
+   attribute and no toggle ships. To bring light mode back: restore the
+   ThemeToggle component, render it in Nav and on the login page, and re-add the
+   `prefers-color-scheme` block.
 --------------------------------------------------------------------------- */
 :root {
+  --bg: #313338;
+  --surface: #2b2d31;
+  --surface-2: #35373c;
+  --surface-sunken: #1e1f22;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #f2f3f5;
+  --muted: #b5bac1;
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --accent-fg: #ffffff;
+  --success: #23a55a;
+  --success-fg: #ffffff;
+  --danger: #f23f42;
+  --danger-fg: #ffffff;
+  --ring: rgba(88, 101, 242, 0.55);
+}
+
+/* Kept for a future toggle; nothing applies this today. */
+:root[data-theme="light"] {
   --bg: #fef9da;
   --surface: #ffffff;
   --surface-2: #ffdcdc;
@@ -21,49 +47,6 @@
   --danger: #b4544c;
   --danger-fg: #ffffff;
   --ring: rgba(208, 164, 163, 0.55);
-}
-
-/* ---------------------------------------------------------------------------
-   Dark mode — Discord-inspired, not an inversion of the light palette.
---------------------------------------------------------------------------- */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #313338;
-    --surface: #2b2d31;
-    --surface-2: #2b2d31;
-    --surface-sunken: #1e1f22;
-    --border: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.16);
-    --text: #f2f3f5;
-    --muted: #b5bac1;
-    --accent: #5865f2;
-    --accent-hover: #4752c4;
-    --accent-fg: #ffffff;
-    --success: #23a55a;
-    --success-fg: #ffffff;
-    --danger: #f23f42;
-    --danger-fg: #ffffff;
-    --ring: rgba(88, 101, 242, 0.55);
-  }
-}
-
-:root[data-theme="dark"] {
-  --bg: #313338;
-  --surface: #2b2d31;
-  --surface-2: #2b2d31;
-  --surface-sunken: #1e1f22;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --text: #f2f3f5;
-  --muted: #b5bac1;
-  --accent: #5865f2;
-  --accent-hover: #4752c4;
-  --accent-fg: #ffffff;
-  --success: #23a55a;
-  --success-fg: #ffffff;
-  --danger: #f23f42;
-  --danger-fg: #ffffff;
-  --ring: rgba(88, 101, 242, 0.55);
 }
 
 @theme inline {
@@ -86,16 +69,7 @@
 }
 
 html {
-  color-scheme: light;
-}
-:root[data-theme="dark"],
-html:has(:root[data-theme="dark"]) {
   color-scheme: dark;
-}
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme="light"]) {
-    color-scheme: dark;
-  }
 }
 
 body {

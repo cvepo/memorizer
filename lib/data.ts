@@ -206,18 +206,36 @@ export type SearchResults = {
   questions: { id: string; deck_id: string; question_text: string; correct_answer: string; topic: string | null; deck: Deck | null }[];
 };
 
+/**
+ * Build an ILIKE pattern that is safe to drop into a raw PostgREST filter.
+ *
+ * `.or()` takes a string in PostgREST's own grammar, where commas separate
+ * conditions and parentheses group them, so an unescaped search term could
+ * change the shape of the filter. Two layers of escaping are needed:
+ *   1. `\`, `%` and `_` are escaped so they stay literal for ILIKE
+ *   2. the result is wrapped in double quotes, with `"` and `\` escaped again,
+ *      so PostgREST treats the whole thing as one opaque value
+ */
+function ilikePattern(term: string) {
+  const forIlike = term.replace(/[\\%_]/g, (m) => `\\${m}`);
+  const quoted = `%${forIlike}%`.replace(/["\\]/g, (m) => `\\${m}`);
+  return { raw: `%${forIlike}%`, quoted: `"${quoted}"` };
+}
+
 export async function search(term: string): Promise<SearchResults> {
-  const query = term.trim();
+  // Cap the length so a pathological pattern cannot make Postgres work hard.
+  const query = term.trim().slice(0, 100);
   if (!query) return { courses: [], decks: [], questions: [] };
-  const like = `%${query.replace(/[%_]/g, (m) => `\\${m}`)}%`;
+  const { raw, quoted } = ilikePattern(query);
 
   const [courses, decks, questions] = await Promise.all([
-    supabase().from("courses").select("*").ilike("name", like).limit(10),
-    supabase().from("decks").select("*, course:courses(*)").ilike("name", like).limit(10),
+    // supabase-js encodes these values itself, so `raw` is fine here.
+    supabase().from("courses").select("*").ilike("name", raw).limit(10),
+    supabase().from("decks").select("*, course:courses(*)").ilike("name", raw).limit(10),
     supabase()
       .from("questions")
       .select("id, deck_id, question_text, correct_answer, topic, deck:decks(id, name, course_id)")
-      .or(`question_text.ilike.${like},correct_answer.ilike.${like},topic.ilike.${like}`)
+      .or(`question_text.ilike.${quoted},correct_answer.ilike.${quoted},topic.ilike.${quoted}`)
       .limit(40),
   ]);
 

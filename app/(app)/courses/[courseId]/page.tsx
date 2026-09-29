@@ -10,7 +10,7 @@ import { accuracy, deckStatsByDeck, emptyStats, getCourse, listDecks } from "@/l
 export async function generateMetadata({ params }: PageProps<"/courses/[courseId]">) {
   const { courseId } = await params;
   const course = await getCourse(courseId);
-  return { title: course ? `${course.name} · BIOMI Study` : "Course · BIOMI Study" };
+  return { title: course ? `${course.name} · Memorizer` : "Course · Memorizer" };
 }
 
 export default async function CoursePage({ params }: PageProps<"/courses/[courseId]">) {

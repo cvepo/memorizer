@@ -5,7 +5,7 @@ import { ButtonLink, EmptyState, PageHeader } from "@/components/ui";
 import { getSession } from "@/lib/auth";
 import { listCourses, listDecksWithCourse } from "@/lib/data";
 
-export const metadata = { title: "Import · BIOMI Study" };
+export const metadata = { title: "Import · Memorizer" };
 
 export default async function ImportPage() {
   const session = await getSession();

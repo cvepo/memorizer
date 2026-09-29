@@ -576,7 +576,7 @@ export function Importer({ courses, decks }: { courses: Course[]; decks: DeckWit
                     <Input
                       value={newCourseName}
                       onChange={(event) => setNewCourseName(event.target.value)}
-                      placeholder="BIOMI 290"
+                      placeholder="e.g. Biology 101"
                     />
                   </Field>
                 ) : null}

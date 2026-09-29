@@ -6,7 +6,7 @@ import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
 import { getSession } from "@/lib/auth";
 import { search } from "@/lib/data";
 
-export const metadata = { title: "Search · BIOMI Study" };
+export const metadata = { title: "Search · Memorizer" };
 
 export default async function SearchPage({ searchParams }: PageProps<"/search">) {
   const session = await getSession();

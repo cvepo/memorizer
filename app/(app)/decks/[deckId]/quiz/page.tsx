@@ -8,7 +8,7 @@ import { getDeck, getDeckTopics, getStudyQuestions } from "@/lib/data";
 export async function generateMetadata({ params }: PageProps<"/decks/[deckId]/quiz">) {
   const { deckId } = await params;
   const deck = await getDeck(deckId);
-  return { title: deck ? `Quiz · ${deck.name}` : "Quiz · BIOMI Study" };
+  return { title: deck ? `Quiz · ${deck.name}` : "Quiz · Memorizer" };
 }
 
 export default async function QuizPage({ params }: PageProps<"/decks/[deckId]/quiz">) {

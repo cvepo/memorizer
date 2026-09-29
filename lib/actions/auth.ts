@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { clearSessionCookie, getSession, setSessionCookie } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { findOrCreateProfile } from "@/lib/data";
+import { clientKey, rateLimit, resetRateLimit } from "@/lib/rateLimit";
 
 export type FormState = { error: string | null };
 
@@ -22,6 +23,14 @@ export async function signIn(_prev: FormState, formData: FormData): Promise<Form
   let name = String(formData.get("profile") ?? "").trim();
 
   if (!password) return { error: "Enter your password." };
+
+  // Throttle guessing before doing any comparison work.
+  const key = await clientKey();
+  const allowed = rateLimit(`login:${key}`, { limit: 10, windowMs: 10 * 60 * 1000 });
+  if (!allowed.ok) {
+    const minutes = Math.max(1, Math.ceil(allowed.retryAfterSeconds / 60));
+    return { error: `Too many attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.` };
+  }
 
   let role: "member" | "admin";
 
@@ -60,6 +69,7 @@ export async function signIn(_prev: FormState, formData: FormData): Promise<Form
     return { error: error instanceof Error ? error.message : "Could not create that profile." };
   }
 
+  resetRateLimit(`login:${key}`);
   await setSessionCookie({ role, profileId, profileName });
   redirect(next.startsWith("/") ? next : "/");
 }

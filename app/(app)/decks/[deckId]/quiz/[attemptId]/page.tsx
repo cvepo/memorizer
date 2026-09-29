@@ -7,7 +7,7 @@ import { getDeck, getQuizAttempt } from "@/lib/data";
 export async function generateMetadata({ params }: PageProps<"/decks/[deckId]/quiz/[attemptId]">) {
   const { deckId } = await params;
   const deck = await getDeck(deckId);
-  return { title: deck ? `Quiz results · ${deck.name}` : "Quiz results · BIOMI Study" };
+  return { title: deck ? `Quiz results · ${deck.name}` : "Quiz results · Memorizer" };
 }
 
 const LABEL = "text-xs uppercase tracking-wide text-muted";

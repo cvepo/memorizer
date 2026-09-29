@@ -1,9 +1,29 @@
-# BIOMI Study
+# Memorizer
 
-A lightweight Quizlet-style study app: import a spreadsheet of questions, study them as
-flashcards, drill them with an adaptive multiple-choice Learn mode, and generate quizzes.
+Turn a spreadsheet of questions into repeated multiple-choice practice.
 
-Next.js (App Router) + TypeScript + Tailwind v4, Supabase Postgres, deployed on Vercel.
+Import a `.csv` or `.xlsx`, and Memorizer works out which columns are which, generates
+plausible wrong answers for questions that only came with a correct one, and drills you
+until each question has been answered correctly twice. Flashcards, an adaptive Learn mode
+and generated quizzes all read from the same deck.
+
+**Next.js 16 (App Router) · TypeScript · Tailwind v4 · Supabase Postgres · Vercel**
+
+## What is interesting here
+
+- **Forgiving import.** Column detection handles the full MCQ layout, a bare
+  `Question | Answer` pair, and answer keys that point at a choice by letter
+  (`Correct: B` resolves to Option B's text). Title rows above the headers are skipped.
+  Everything is overridable in a preview that reports valid rows, missing answers and
+  probable duplicates before a single row is written.
+- **Distractors generated at read time, not stored.** When a question has no wrong
+  answers, they are borrowed from other questions' correct answers — same topic first,
+  preferring similar lengths so a short answer is not sitting next to a long one. Because
+  nothing is persisted, the combination and the order differ every session.
+- **Mastery that resists short-term recall.** A miss resets the counter and puts the
+  question back 3–7 questions later rather than immediately.
+- **Concurrency-safe progress.** Mastery updates are a single atomic upsert in Postgres,
+  so two people studying at once cannot clobber each other's counters.
 
 ---
 
@@ -123,9 +143,33 @@ Everyone picks a **name** at sign-in. That name is a *profile*: mastery, accurac
 history are per profile, so your friend answering badly does not wipe out your progress.
 The decks themselves are shared. Switch profiles at `/profile`.
 
-The session is a signed, `httpOnly` cookie valid for 30 days. `proxy.ts` gates every route
-except `/login`. Server actions re-check the session themselves, and every write that changes
-course material calls `requireAdmin()` — hiding the buttons is not the security boundary.
+The session is a signed, `httpOnly`, `secure` cookie valid for 30 days. `proxy.ts` gates every
+route except `/login`. Server actions re-check the session themselves, and every write that
+changes course material calls `requireAdmin()` — hiding the buttons is not the boundary.
+
+## Security notes
+
+- **The browser never talks to Supabase.** Every read and write goes through server code
+  using the secret key. RLS is enabled with no policies, so the publishable key — and
+  anyone who finds the project URL — gets nothing.
+- **Passwords are bcrypt hashes** (cost 12) in environment variables. The raw passwords
+  are never in the repo or shipped to the client.
+- **Sign-in is rate limited** to 10 attempts per 10 minutes per IP. State is per function
+  instance rather than global, so it is a speed bump for online guessing, not a lockout —
+  see the note in `lib/rateLimit.ts`.
+- **A wrong admin email and a wrong admin password return the same message**, so neither
+  can be probed independently.
+- **The `next=` redirect parameter is checked** to be a relative path, so the login screen
+  cannot be used as an open redirect.
+- **Search escapes twice.** `.or()` takes a raw PostgREST filter expression, so the term is
+  escaped for `ILIKE` and then quoted so it cannot alter the shape of the filter.
+- **Security headers** (CSP, HSTS, `X-Frame-Options`, `nosniff`, `Referrer-Policy`,
+  `Permissions-Policy`) are set in `next.config.ts`.
+
+What this deliberately is not: there are no real accounts. Anyone with the shared password
+can see every deck, and anyone with the admin password can change them. Profiles separate
+progress, not permissions — picking someone else's name shows you their progress. That
+tradeoff is the point of the design, not an oversight.
 
 ## Importing spreadsheets
 
@@ -206,11 +250,17 @@ samples/                     example spreadsheets
 
 ## Theming
 
-Light mode uses the PRD palette (warm cream background, dusty rose accents, sage for success).
-Dark mode is Discord-inspired (`#313338` / `#2B2D31`, blurple accents). Every colour is a CSS
-variable in `app/globals.css` surfaced as a Tailwind token — `bg-surface`, `text-muted`,
-`bg-accent`, `text-success`, `tint-danger`, and so on. No component hard-codes a hex value, so
-both themes stay consistent. The toggle offers Light / Dark / System and defaults to System.
+Dark only, Discord-inspired: `#313338` page, `#2B2D31` cards, blurple for primary actions,
+green and red reserved for correct and incorrect.
+
+Every colour is a CSS variable in `app/globals.css` exposed as a Tailwind token —
+`bg-surface`, `text-muted`, `bg-accent`, `text-success`, `tint-danger`. No component
+hard-codes a hex value, so the palette is swappable from one file.
+
+A light palette is still defined under `:root[data-theme="light"]` but nothing sets that
+attribute and no toggle ships. To bring it back: restore a toggle component that sets
+`data-theme`, render it in `Nav` and on the login page, and re-add the `prefers-color-scheme`
+block in `globals.css`.
 
 ## Scripts
 
