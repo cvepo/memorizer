@@ -8,6 +8,8 @@ import { Badge, cn } from "@/components/ui";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { signOut } from "@/lib/actions/auth";
 
+const ADMIN_ONLY = new Set(["/import", "/admin"]);
+
 const LINKS = [
   { href: "/", label: "Home" },
   { href: "/courses", label: "Courses" },
@@ -15,6 +17,7 @@ const LINKS = [
   { href: "/search", label: "Search" },
   { href: "/starred", label: "Starred" },
   { href: "/import", label: "Import" },
+  { href: "/admin", label: "Admin" },
 ];
 
 export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: boolean }) {
@@ -23,7 +26,7 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
-  const links = LINKS.filter((link) => link.href !== "/import" || isAdmin);
+  const links = LINKS.filter((link) => !ADMIN_ONLY.has(link.href) || isAdmin);
 
   return (
     <header className="sticky top-0 z-20 border-b border-line bg-bg/90 backdrop-blur">

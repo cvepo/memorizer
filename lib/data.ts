@@ -11,6 +11,7 @@ import type {
   QuizAnswer,
   QuizAttempt,
   StudyActivity,
+  StudyMode,
   StudyQuestion,
   TopicStats,
 } from "@/lib/types";
@@ -362,4 +363,164 @@ export async function recentStudyActivity(profileId: string, limit = 10): Promis
       .limit(limit),
   );
   return (data ?? []) as StudyActivity[];
+}
+
+// ---------------------------------------------------------------------------
+// Admin overview
+// ---------------------------------------------------------------------------
+
+export type ProfileDeckRow = {
+  deckId: string;
+  deckName: string;
+  courseName: string | null;
+  totalQuestions: number;
+  started: number;
+  mastered: number;
+  answers: number;
+  correct: number;
+  needsReview: number;
+  starred: number;
+  lastStudiedAt: string | null;
+  lastMode: StudyMode | null;
+  quizzes: number;
+  bestQuizPercent: number | null;
+};
+
+export type ProfileOverview = {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastStudiedAt: string | null;
+  totals: {
+    started: number;
+    mastered: number;
+    answers: number;
+    correct: number;
+    needsReview: number;
+    starred: number;
+    quizzes: number;
+  };
+  decks: ProfileDeckRow[];
+};
+
+/**
+ * Everything the admin dashboard shows, aggregated in one pass.
+ *
+ * Deliberately built from the existing tables rather than a new SQL function:
+ * the volumes here are one row per profile per studied question, which stays
+ * small for a shared study site, and it keeps the feature from depending on
+ * another migration.
+ */
+export async function profileOverviews(): Promise<ProfileOverview[]> {
+  const db = supabase();
+
+  const [profiles, decks, questions, progress, activity, attempts, stars] = await Promise.all([
+    db.from("profiles").select("*").order("created_at"),
+    db.from("decks").select("id, name, course:courses(name)"),
+    db.from("questions").select("id, deck_id"),
+    db
+      .from("question_progress")
+      .select("profile_id, question_id, times_seen, times_correct, times_incorrect, mastery_count"),
+    db.from("study_activity").select("profile_id, deck_id, last_mode, last_studied_at"),
+    db
+      .from("quiz_attempts")
+      .select("profile_id, deck_id, percentage, completed_at")
+      .not("completed_at", "is", null),
+    db.from("starred_questions").select("profile_id, question_id"),
+  ]);
+
+  const deckOf = new Map<string, string>();
+  for (const q of (questions.data ?? []) as { id: string; deck_id: string }[]) deckOf.set(q.id, q.deck_id);
+
+  const questionCount = new Map<string, number>();
+  for (const deckId of deckOf.values()) questionCount.set(deckId, (questionCount.get(deckId) ?? 0) + 1);
+
+  type DeckRow = { id: string; name: string; course: { name: string } | null };
+  const deckInfo = new Map<string, DeckRow>();
+  for (const d of (decks.data ?? []) as unknown as DeckRow[]) deckInfo.set(d.id, d);
+
+  return ((profiles.data ?? []) as Profile[]).map((profile) => {
+    const rows = new Map<string, ProfileDeckRow>();
+    const row = (deckId: string): ProfileDeckRow => {
+      let existing = rows.get(deckId);
+      if (!existing) {
+        const info = deckInfo.get(deckId);
+        existing = {
+          deckId,
+          deckName: info?.name ?? "Deleted deck",
+          courseName: info?.course?.name ?? null,
+          totalQuestions: questionCount.get(deckId) ?? 0,
+          started: 0, mastered: 0, answers: 0, correct: 0,
+          needsReview: 0, starred: 0,
+          lastStudiedAt: null, lastMode: null, quizzes: 0, bestQuizPercent: null,
+        };
+        rows.set(deckId, existing);
+      }
+      return existing;
+    };
+
+    for (const p of (progress.data ?? []) as {
+      profile_id: string; question_id: string; times_seen: number;
+      times_correct: number; times_incorrect: number; mastery_count: number;
+    }[]) {
+      if (p.profile_id !== profile.id) continue;
+      const deckId = deckOf.get(p.question_id);
+      if (!deckId) continue;
+      const r = row(deckId);
+      if (p.times_seen > 0) r.started += 1;
+      if (p.mastery_count >= 3) r.mastered += 1;
+      if (p.times_incorrect >= 2 && p.mastery_count < 3) r.needsReview += 1;
+      r.answers += p.times_correct + p.times_incorrect;
+      r.correct += p.times_correct;
+    }
+
+    for (const s of (stars.data ?? []) as { profile_id: string; question_id: string }[]) {
+      if (s.profile_id !== profile.id) continue;
+      const deckId = deckOf.get(s.question_id);
+      if (deckId) row(deckId).starred += 1;
+    }
+
+    for (const a of (activity.data ?? []) as {
+      profile_id: string; deck_id: string; last_mode: StudyMode; last_studied_at: string;
+    }[]) {
+      if (a.profile_id !== profile.id) continue;
+      const r = row(a.deck_id);
+      r.lastStudiedAt = a.last_studied_at;
+      r.lastMode = a.last_mode;
+    }
+
+    for (const q of (attempts.data ?? []) as { profile_id: string; deck_id: string; percentage: number }[]) {
+      if (q.profile_id !== profile.id) continue;
+      const r = row(q.deck_id);
+      r.quizzes += 1;
+      r.bestQuizPercent = Math.max(r.bestQuizPercent ?? 0, Number(q.percentage));
+    }
+
+    const deckRows = [...rows.values()].sort((a, b) => {
+      if (a.lastStudiedAt && b.lastStudiedAt) return b.lastStudiedAt.localeCompare(a.lastStudiedAt);
+      if (a.lastStudiedAt) return -1;
+      if (b.lastStudiedAt) return 1;
+      return a.deckName.localeCompare(b.deckName);
+    });
+
+    const totals = deckRows.reduce(
+      (acc, r) => ({
+        started: acc.started + r.started,
+        mastered: acc.mastered + r.mastered,
+        answers: acc.answers + r.answers,
+        correct: acc.correct + r.correct,
+        needsReview: acc.needsReview + r.needsReview,
+        starred: acc.starred + r.starred,
+        quizzes: acc.quizzes + r.quizzes,
+      }),
+      { started: 0, mastered: 0, answers: 0, correct: 0, needsReview: 0, starred: 0, quizzes: 0 },
+    );
+
+    const lastStudiedAt = deckRows.reduce<string | null>(
+      (latest, r) => (r.lastStudiedAt && (!latest || r.lastStudiedAt > latest) ? r.lastStudiedAt : latest),
+      null,
+    );
+
+    return { id: profile.id, name: profile.name, createdAt: profile.created_at, lastStudiedAt, totals, decks: deckRows };
+  });
 }

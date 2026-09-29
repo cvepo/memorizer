@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { requireSession } from "@/lib/auth";
+import { requireAdmin, requireSession } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import type { StudyMode } from "@/lib/types";
 
@@ -42,4 +42,19 @@ export async function setStarred(questionId: string, starred: boolean): Promise<
   }
 
   revalidatePath("/starred");
+}
+
+/**
+ * Remove a profile and everything scoped to it — progress, stars, activity and
+ * quiz history all cascade. Decks and questions are shared and are untouched.
+ */
+export async function deleteProfile(profileId: string): Promise<void> {
+  const session = await requireAdmin();
+  if (session.profileId === profileId) {
+    throw new Error("You cannot delete the profile you are signed in as.");
+  }
+
+  const { error } = await supabase().from("profiles").delete().eq("id", profileId);
+  if (error) throw new Error(error.message);
+  revalidatePath("/admin");
 }
