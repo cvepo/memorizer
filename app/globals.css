@@ -103,12 +103,13 @@ body {
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
-/* A new flashcard slides in a few pixels as it arrives. Small enough to read
-   as "that one is gone, here is the next" without being a performance. */
+/* The text of a new flashcard slides in a few pixels as it arrives. It never
+   starts fully transparent, because on a dark background that reads as a flash
+   rather than as movement. */
 @keyframes card-enter {
   from {
-    opacity: 0;
-    transform: translateX(var(--enter-from, 12px));
+    opacity: 0.15;
+    transform: translateX(var(--enter-from, 10px));
   }
   to {
     opacity: 1;
@@ -118,7 +119,7 @@ body {
 
 @keyframes card-enter-fade {
   from {
-    opacity: 0;
+    opacity: 0.25;
   }
   to {
     opacity: 1;

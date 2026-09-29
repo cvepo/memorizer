@@ -129,12 +129,10 @@ export function Flashcards({
         <ProgressBar value={index + 1} total={order.length} tone="accent" />
       </div>
 
-      {/* One card, swapped in place. The only movement is the new card
-          arriving; flipping is instant so it never feels like a performance. */}
+      {/* The card surface — border, background, size — never animates. Keying
+          the whole button meant the card itself blanked out and back on every
+          move, which read as a flash. Only the text inside is replaced. */}
       <button
-        key={step}
-        data-card-enter
-        style={{ "--enter-from": enterFrom } as CSSProperties}
         type="button"
         onClick={flip}
         aria-label={flipped ? "Show the question" : "Show the answer"}
@@ -144,19 +142,27 @@ export function Flashcards({
           {flipped ? "Answer" : "Question"}
         </span>
 
-        {flipped ? (
-          <>
-            <p className="text-2xl font-semibold sm:text-3xl">{current.correct_answer}</p>
-            {current.explanation ? (
-              <p className="max-w-prose text-sm text-muted">{current.explanation}</p>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <p className="text-xl font-medium leading-snug sm:text-2xl">{current.question_text}</p>
-            <span className={CARD_HINT}>Click or press Space to reveal</span>
-          </>
-        )}
+        <span
+          key={step}
+          data-card-enter
+          style={{ "--enter-from": enterFrom } as CSSProperties}
+          className="flex flex-col items-center gap-3"
+        >
+          {flipped ? (
+            <>
+              <span className="text-2xl font-semibold sm:text-3xl">{current.correct_answer}</span>
+              {current.explanation ? (
+                <span className="max-w-prose text-sm text-muted">{current.explanation}</span>
+              ) : null}
+            </>
+          ) : (
+            <span className="text-xl font-medium leading-snug sm:text-2xl">
+              {current.question_text}
+            </span>
+          )}
+        </span>
+
+        {flipped ? null : <span className={CARD_HINT}>Click or press Space to reveal</span>}
       </button>
 
       <div className="space-y-3">

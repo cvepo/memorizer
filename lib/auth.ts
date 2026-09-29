@@ -38,20 +38,53 @@ export async function signSession(session: Session): Promise<string> {
     .sign(secret());
 }
 
-export async function verifySession(token: string | undefined): Promise<Session | null> {
+/**
+ * Verify a session cookie and report when it runs out, so the caller can decide
+ * whether to hand back a fresh one.
+ */
+export async function readSession(
+  token: string | undefined,
+): Promise<{ session: Session; expiresAt: number } | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify<SessionClaims>(token, secret());
     if (!payload.pid || !payload.pname) return null;
     return {
-      role: payload.role === "admin" ? "admin" : "member",
-      profileId: payload.pid,
-      profileName: payload.pname,
+      session: {
+        role: payload.role === "admin" ? "admin" : "member",
+        profileId: payload.pid,
+        profileName: payload.pname,
+      },
+      // exp is seconds since the epoch; absent should not happen, but treat a
+      // missing one as already due for renewal rather than trusting it forever.
+      expiresAt: typeof payload.exp === "number" ? payload.exp : 0,
     };
   } catch {
     return null;
   }
 }
+
+export async function verifySession(token: string | undefined): Promise<Session | null> {
+  return (await readSession(token))?.session ?? null;
+}
+
+/**
+ * Sessions slide: once a cookie is past the halfway point of its life, the next
+ * request gets a fresh 30 days. Someone who studies regularly is never signed
+ * out, while a browser left untouched for a month still expires.
+ */
+export function needsRenewal(expiresAt: number): boolean {
+  const secondsLeft = expiresAt - Math.floor(Date.now() / 1000);
+  return secondsLeft < SESSION_MAX_AGE_SECONDS / 2;
+}
+
+export const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  sameSite: "lax",
+  secure: process.env.NODE_ENV === "production",
+  path: "/",
+  maxAge: SESSION_MAX_AGE_SECONDS,
+} as const;
 
 export async function getSession(): Promise<Session | null> {
   const store = await cookies();
@@ -78,13 +111,7 @@ export async function requireAdmin(): Promise<Session> {
 
 export async function setSessionCookie(session: Session) {
   const store = await cookies();
-  store.set(SESSION_COOKIE, await signSession(session), {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
+  store.set(SESSION_COOKIE, await signSession(session), SESSION_COOKIE_OPTIONS);
 }
 
 export async function clearSessionCookie() {
