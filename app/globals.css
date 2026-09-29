@@ -1,26 +1,139 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   Light mode — the palette from the PRD.
+   Cream dominates; rose and sage are accents, never large surfaces.
+--------------------------------------------------------------------------- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #fef9da;
+  --surface: #ffffff;
+  --surface-2: #ffdcdc;
+  --surface-sunken: #fdf3c8;
+  --border: rgba(47, 47, 47, 0.1);
+  --border-strong: rgba(47, 47, 47, 0.2);
+  --text: #2f2f2f;
+  --muted: #666666;
+  --accent: #d0a4a3;
+  --accent-hover: #c39392;
+  --accent-fg: #2f2f2f;
+  --success: #93a571;
+  --success-fg: #2f2f2f;
+  --danger: #b4544c;
+  --danger-fg: #ffffff;
+  --ring: rgba(208, 164, 163, 0.55);
+}
+
+/* ---------------------------------------------------------------------------
+   Dark mode — Discord-inspired, not an inversion of the light palette.
+--------------------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #313338;
+    --surface: #2b2d31;
+    --surface-2: #2b2d31;
+    --surface-sunken: #1e1f22;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text: #f2f3f5;
+    --muted: #b5bac1;
+    --accent: #5865f2;
+    --accent-hover: #4752c4;
+    --accent-fg: #ffffff;
+    --success: #23a55a;
+    --success-fg: #ffffff;
+    --danger: #f23f42;
+    --danger-fg: #ffffff;
+    --ring: rgba(88, 101, 242, 0.55);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #313338;
+  --surface: #2b2d31;
+  --surface-2: #2b2d31;
+  --surface-sunken: #1e1f22;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #f2f3f5;
+  --muted: #b5bac1;
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --accent-fg: #ffffff;
+  --success: #23a55a;
+  --success-fg: #ffffff;
+  --danger: #f23f42;
+  --danger-fg: #ffffff;
+  --ring: rgba(88, 101, 242, 0.55);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-sunken: var(--surface-sunken);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-success: var(--success);
+  --color-success-fg: var(--success-fg);
+  --color-danger: var(--danger);
+  --color-danger-fg: var(--danger-fg);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+html {
+  color-scheme: light;
+}
+:root[data-theme="dark"],
+html:has(:root[data-theme="dark"]) {
+  color-scheme: dark;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  html:not([data-theme="light"]) {
+    color-scheme: dark;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  border-color: var(--border);
+}
+
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Tinted state surfaces. color-mix keeps correct/incorrect legible in both
+   themes without a second set of hard-coded hexes. */
+@utility tint-success {
+  background-color: color-mix(in srgb, var(--success) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--success) 55%, transparent);
+}
+@utility tint-danger {
+  background-color: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+@utility tint-accent {
+  background-color: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
