@@ -88,6 +88,18 @@ export function LearnSession({
 }) {
   const byId = useMemo(() => new Map(questions.map((q) => [q.id, q])), [questions]);
 
+  /**
+   * A server action — starring, for instance — makes Next re-render this
+   * route's server components, which hands back a new `questions` array. That
+   * new identity must not be allowed to retrigger choice generation, or the
+   * options would reshuffle under the reader mid-question. The pool is read
+   * through a ref so only the question actually on screen drives that effect.
+   */
+  const questionsRef = useRef(questions);
+  useEffect(() => {
+    questionsRef.current = questions;
+  }, [questions]);
+
   // A focused review is explicitly about this handful of questions, so a
   // Mastered one is seeded a level short and rejoins the pool: one correct
   // answer clears it again. Only the seed is lowered — stored mastery is
@@ -122,17 +134,31 @@ export function LearnSession({
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    const queue = new AnswerQueue(profileId, (answers) => recordAnswers(answers, "learn"));
-    queueRef.current = queue;
-    // Answers stored before a refresh or a crash are still owed to the server.
-    if (queue.pendingCount > 0) void queue.flush();
-
     const saved = readStoredRange();
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (saved) setRange(saved);
     setState(createLearnState(seedQuestions, saved ?? DEFAULT_CHECKPOINT_RANGE));
     setReady(true);
   }, [seedQuestions, profileId]);
+
+  /**
+   * The queue is created on demand rather than in a mount effect.
+   *
+   * React re-invokes mount effects in development, so a queue created in one
+   * effect and destroyed by another can end up destroyed and never rebuilt —
+   * and because `enqueue` is reached through an optional chain, every answer
+   * after that point is silently dropped. Building it lazily means it cannot
+   * be missing at the moment it is needed.
+   */
+  const getQueue = useCallback(() => {
+    if (!queueRef.current) {
+      const queue = new AnswerQueue(profileId, (answers) => recordAnswers(answers, "learn"));
+      queueRef.current = queue;
+      // Answers stored before a refresh or a crash are still owed to the server.
+      if (queue.pendingCount > 0) void queue.flush();
+    }
+    return queueRef.current;
+  }, [profileId]);
 
   useEffect(
     () => () => {
@@ -142,22 +168,19 @@ export function LearnSession({
     [],
   );
 
-  // The queue only exists after mount, so the subscription is re-established
-  // once `ready` flips rather than latching onto nothing.
   const subscribeSave = useCallback(
     (onChange: () => void) => {
-      const queue = ready ? queueRef.current : null;
-      if (!queue) return () => {};
-      return queue.subscribe(onChange);
+      const queue = getQueue();
+      const unsubscribe = queue.subscribe(onChange);
+      // Pick up whatever state it already had, e.g. work restored from storage.
+      onChange();
+      return unsubscribe;
     },
-    [ready],
+    [getQueue],
   );
-  const readSaveStatus = useCallback(
-    () => (ready ? queueRef.current?.getStatus() ?? IDLE_SAVE : IDLE_SAVE),
-    [ready],
-  );
+  const readSaveStatus = useCallback(() => queueRef.current?.getStatus() ?? IDLE_SAVE, []);
   const saveStatus = useSyncExternalStore(subscribeSave, readSaveStatus, () => IDLE_SAVE);
-  const retrySave = useCallback(() => queueRef.current?.retry(), []);
+  const retrySave = useCallback(() => getQueue().retry(), [getQueue]);
 
   const toggleStar = useCallback((questionId: string, next: boolean) => {
     setStarred((previous) => {
@@ -173,10 +196,14 @@ export function LearnSession({
   const presentationKey = `${presentation}:${currentId ?? ""}`;
 
   useEffect(() => {
-    if (!question) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPresented({ key: presentationKey, choices: generateChoices(question, questions) });
-  }, [presentationKey, question, questions]);
+    if (!currentId) return;
+    const pool = questionsRef.current;
+    const showing = pool.find((q) => q.id === currentId);
+    if (!showing) return;
+    // Deferred to an effect because generateChoices is random: running it
+    // during render would disagree between server and client.
+    setPresented({ key: presentationKey, choices: generateChoices(showing, pool) });
+  }, [presentationKey, currentId]);
 
   const choices = presented && presented.key === presentationKey ? presented.choices : null;
 
@@ -210,13 +237,13 @@ export function LearnSession({
       setWasCorrect(choice.isCorrect);
       setPhase("feedback");
       // Returns immediately: the queue owns durability, the UI never waits.
-      queueRef.current?.enqueue({
+      getQueue().enqueue({
         eventId: newEventId(),
         questionId: question.id,
         wasCorrect: choice.isCorrect,
       });
     },
-    [phase, question],
+    [phase, question, getQueue],
   );
 
   const advance = useCallback(() => {
