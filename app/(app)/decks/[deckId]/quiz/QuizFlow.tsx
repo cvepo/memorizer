@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
+import { KeyboardHints, type KeyHint } from "@/components/KeyboardHints";
 import { MCQOption, OPTION_LABELS } from "@/components/MCQOption";
 import { Button, ButtonLink, Card, PageHeader, ProgressBar, cn } from "@/components/ui";
 import { touchStudyActivity } from "@/lib/actions/activity";
@@ -62,6 +63,15 @@ const matchesPool = (question: StudyQuestion, pool: Pool): boolean => {
 };
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Built from OPTION_LABELS so the legend cannot list a key the handler does
+ *  not accept, and only as many as the question actually offers. */
+function optionHints(count: number): KeyHint[] {
+  return Array.from({ length: Math.min(count, 4) }, (_, i) => ({
+    keys: [String(i + 1), (OPTION_LABELS[i] ?? "").toLowerCase()],
+    label: `Answer ${OPTION_LABELS[i] ?? i + 1}`,
+  }));
+}
 
 export function QuizFlow({
   profileId,
@@ -386,7 +396,10 @@ export function QuizFlow({
         go(-1);
         return;
       }
-      if (event.key === "ArrowRight") {
+      // Enter, Space and the right arrow all move on, matching Learn. Submitting
+      // is deliberately left to the button: it ends the attempt, and a stray
+      // keypress should not do that.
+      if (event.key === "ArrowRight" || event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         go(1);
         return;
@@ -771,6 +784,14 @@ export function QuizFlow({
           </Button>
         )}
       </div>
+
+      <KeyboardHints
+        hints={[
+          ...optionHints(items[index]?.choices.length ?? 4),
+          { keys: ["Enter", "Space", "→"], label: "Next question" },
+          { keys: ["←"], label: "Previous question" },
+        ]}
+      />
     </div>
   );
 }

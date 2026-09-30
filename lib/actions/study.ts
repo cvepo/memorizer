@@ -1,5 +1,7 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
+
 import { requireSession } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 
@@ -145,4 +147,34 @@ export async function submitQuiz(
   }
 
   return attempt.id;
+}
+
+/**
+ * Wipe this profile's learning progress for one deck: mastery, accuracy,
+ * miss counts and therefore its review flags all go back to zero.
+ *
+ * Stars are deliberately left alone — they are manual bookmarks, not progress.
+ * The answer_events ledger is also kept: it is what makes retries idempotent,
+ * and clearing it would let a queued answer replay into the fresh slate.
+ */
+export async function resetDeckProgress(deckId: string): Promise<void> {
+  const session = await requireSession();
+  const db = supabase();
+
+  const { data: questions, error } = await db.from("questions").select("id").eq("deck_id", deckId);
+  if (error) throw new Error(error.message);
+
+  const ids = (questions ?? []).map((q) => q.id);
+  // Chunked because the ids travel in the query string.
+  for (let i = 0; i < ids.length; i += 50) {
+    const batch = ids.slice(i, i + 50);
+    const { error: deleteError } = await db
+      .from("question_progress")
+      .delete()
+      .eq("profile_id", session.profileId)
+      .in("question_id", batch);
+    if (deleteError) throw new Error(deleteError.message);
+  }
+
+  revalidatePath(`/decks/${deckId}`);
 }

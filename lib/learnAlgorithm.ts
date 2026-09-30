@@ -37,6 +37,8 @@ export const DEFAULT_CHECKPOINT_RANGE: CheckpointRange = { min: 5, max: 10 };
 export type QuestionState = {
   mastery: MasteryLevel;
   wrongCount: number;
+  /** Lifetime correct answers, seeded from the database. */
+  correctCount: number;
   /** Answer index when this was last shown; -1 if never. */
   lastSeen: number;
   /** Earliest answer index at which it may be shown again. */
@@ -65,6 +67,14 @@ export type LearnState = {
   checkpointRange: CheckpointRange;
   /** Ids that reached Mastered during this session. */
   masteredThisSession: string[];
+  /**
+   * Once the whole deck has been mastered the session does not end; it keeps
+   * going, drawing the questions you are weakest on. Set the first time the
+   * queue would otherwise have run dry.
+   */
+  endless: boolean;
+  /** How many times the deck has been fully mastered this session. */
+  laps: number;
 };
 
 export type Counts = { new: number; learning: number; familiar: number; mastered: number; total: number };
@@ -115,10 +125,22 @@ function initialState(question: StudyQuestion): QuestionState {
   return {
     mastery,
     wrongCount: stored?.times_incorrect ?? 0,
+    correctCount: stored?.times_correct ?? 0,
     lastSeen: -1,
     dueAt: 0,
     seen: (stored?.times_seen ?? 0) > 0,
   };
+}
+
+/**
+ * How well a question is known, from 0 (always wrong) to 1 (always right).
+ *
+ * A Laplace prior keeps an unanswered question near the middle rather than at
+ * zero, so "never seen" does not masquerade as "always wrong" and crowd out
+ * questions you genuinely keep missing.
+ */
+export function strengthOf(state: QuestionState): number {
+  return (state.correctCount + 1) / (state.correctCount + state.wrongCount + 2);
 }
 
 /** Order questions by how much attention they need, shuffled within each tier. */
@@ -135,6 +157,43 @@ function byNeed(questions: readonly StudyQuestion[], states: Record<string, Ques
     .flatMap((t) => shuffle(tiers.get(t)!).map((q) => q.id));
 }
 
+/**
+ * Sample `size` ids, favouring the ones you are weakest on.
+ *
+ * A shortlist of the N weakest was the obvious approach and is wrong: once the
+ * shortlist is as wide as the deck — which it is for any small deck — every
+ * question becomes equally likely and the ranking does nothing. Weighting each
+ * question by how shaky it is keeps the bias at any deck size, while still
+ * letting a well-known question come round occasionally.
+ */
+function sampleByWeakness(
+  ids: readonly string[],
+  states: Record<string, QuestionState>,
+  size: number,
+  exclude: string,
+): string[] {
+  const pool = ids.filter((id) => id !== exclude);
+  if (pool.length <= size) return shuffle(pool);
+
+  // Cubed so the difference between 60% and 90% known is felt, not merely noted.
+  const weightOf = (id: string) => Math.max(0.02, (1 - strengthOf(states[id])) ** 3);
+
+  const remaining = [...pool];
+  const picked: string[] = [];
+  while (picked.length < size && remaining.length > 0) {
+    const total = remaining.reduce((sum, id) => sum + weightOf(id), 0);
+    let target = Math.random() * total;
+    let index = remaining.length - 1;
+    for (let i = 0; i < remaining.length; i++) {
+      target -= weightOf(remaining[i]);
+      if (target <= 0) { index = i; break; }
+    }
+    picked.push(remaining[index]);
+    remaining.splice(index, 1);
+  }
+  return picked;
+}
+
 export function createLearnState(
   questions: readonly StudyQuestion[],
   range: CheckpointRange = DEFAULT_CHECKPOINT_RANGE,
@@ -144,8 +203,13 @@ export function createLearnState(
 
   const unmastered = questions.filter((q) => states[q.id].mastery < MASTERY_MASTERED);
   const ordered = byNeed(unmastered, states);
-  const pool = ordered.slice(0, POOL_SIZE);
-  const backlog = ordered.slice(POOL_SIZE);
+  let pool = ordered.slice(0, POOL_SIZE);
+  let backlog = ordered.slice(POOL_SIZE);
+
+  if (unmastered.length === 0 && questions.length > 0) {
+    pool = sampleByWeakness(questions.map((q) => q.id), states, POOL_SIZE, "");
+    backlog = [];
+  }
 
   return {
     states,
@@ -161,6 +225,9 @@ export function createLearnState(
     checkpointTarget: checkpointTarget(range),
     checkpointRange: range,
     masteredThisSession: [],
+    // A deck that is already fully mastered starts straight into review.
+    endless: unmastered.length === 0,
+    laps: 0,
   };
 }
 
@@ -212,6 +279,7 @@ export function applyAnswer(
   const updated: QuestionState = {
     mastery,
     wrongCount: previous.wrongCount + (wasCorrect ? 0 : 1),
+    correctCount: previous.correctCount + (wasCorrect ? 1 : 0),
     lastSeen: answered,
     dueAt: answered + spacingFor(mastery, wasCorrect),
     seen: true,
@@ -228,6 +296,19 @@ export function applyAnswer(
       const [next, ...rest] = backlog;
       backlog = rest;
       pool = [...pool, next];
+    }
+  }
+
+  // Nothing left to master: keep going with whatever is weakest rather than
+  // ending the session.
+  let endless = state.endless;
+  let laps = state.laps;
+  if (pool.length === 0 && backlog.length === 0) {
+    const all = Object.keys(states);
+    if (all.length > 0) {
+      if (!endless) laps += 1;
+      endless = true;
+      pool = sampleByWeakness(all, states, POOL_SIZE, questionId);
     }
   }
 
@@ -253,6 +334,8 @@ export function applyAnswer(
     masteredThisSession: becameMastered
       ? [...state.masteredThisSession, questionId]
       : state.masteredThisSession,
+    endless,
+    laps,
   };
 
   return {
@@ -262,6 +345,7 @@ export function applyAnswer(
   };
 }
 
+/** Endless review never finishes; it only runs out if the deck is empty. */
 export function isComplete(state: LearnState): boolean {
   return state.pool.length === 0 && state.backlog.length === 0;
 }

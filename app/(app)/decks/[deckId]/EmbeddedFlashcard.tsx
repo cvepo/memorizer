@@ -2,6 +2,8 @@
 
 import { StarButton } from "@/components/StarButton";
 import { cn } from "@/components/ui";
+import { OPTION_LABELS } from "@/components/MCQOption";
+import type { Choice } from "@/lib/distractors";
 import type { StudyQuestion } from "@/lib/types";
 
 /** Generous vertical padding leaves room for the label at the top and the hint
@@ -17,6 +19,7 @@ export function EmbeddedFlashcard({
   starred,
   index,
   total,
+  choices,
   onStarChange,
 }: {
   question: StudyQuestion;
@@ -25,6 +28,10 @@ export function EmbeddedFlashcard({
   starred: boolean;
   index: number;
   total: number;
+  /** The four options, shown on the question face so the card reads like the
+   *  multiple-choice question it actually is. Display only — picking one is
+   *  what Learn and Quiz are for, so these are not interactive here. */
+  choices: Choice[] | null;
   onStarChange?: (starred: boolean) => void;
 }) {
   return (
@@ -60,6 +67,11 @@ export function EmbeddedFlashcard({
               <span className="text-2xl font-semibold break-words sm:text-3xl">
                 {question.correct_answer}
               </span>
+              {choices && choices.length > 0 ? (
+                <span className="text-xs tracking-wide text-muted uppercase">
+                  Option {OPTION_LABELS[choices.findIndex((c) => c.isCorrect)] ?? "?"}
+                </span>
+              ) : null}
               {question.explanation ? (
                 <span className="max-w-prose text-sm break-words text-muted">
                   {question.explanation}
@@ -67,9 +79,29 @@ export function EmbeddedFlashcard({
               ) : null}
             </>
           ) : (
-            <span className="text-xl leading-snug font-medium break-words sm:text-2xl">
-              {question.question_text}
-            </span>
+            <>
+              <span className="text-xl leading-snug font-medium break-words sm:text-2xl">
+                {question.question_text}
+              </span>
+              {choices && choices.length > 0 ? (
+                <span className="mt-2 flex w-full max-w-lg flex-col gap-2 text-left">
+                  {choices.map((choice, i) => (
+                    <span
+                      key={choice.text}
+                      className="flex items-start gap-2.5 rounded-lg border border-line px-3 py-2"
+                    >
+                      <span
+                        aria-hidden
+                        className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border border-line-strong text-[11px] font-semibold text-muted"
+                      >
+                        {OPTION_LABELS[i] ?? i + 1}
+                      </span>
+                      <span className="text-sm break-words">{choice.text}</span>
+                    </span>
+                  ))}
+                </span>
+              ) : null}
+            </>
           )}
         </span>
 

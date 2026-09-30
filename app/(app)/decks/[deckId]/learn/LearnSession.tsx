@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { KeyboardHints, type KeyHint } from "@/components/KeyboardHints";
 import { MCQOption, OPTION_LABELS, type OptionState } from "@/components/MCQOption";
@@ -10,7 +10,7 @@ import { RangeSlider } from "@/components/RangeSlider";
 import { SaveStatus } from "@/components/SaveStatus";
 import { StarButton } from "@/components/StarButton";
 import { Button, ButtonLink, Card, ProgressBar, Stat, cn } from "@/components/ui";
-import { recordAnswers } from "@/lib/actions/study";
+import { recordAnswers, resetDeckProgress } from "@/lib/actions/study";
 import { AnswerQueue, newEventId, type QueueStatus } from "@/lib/answerQueue";
 import { generateChoices, maxAvailableChoices, type Choice } from "@/lib/distractors";
 import {
@@ -132,12 +132,15 @@ export function LearnSession({
   const [range, setRange] = useState<CheckpointRange>(DEFAULT_CHECKPOINT_RANGE);
   const [state, setState] = useState<LearnState | null>(null);
 
-  const [phase, setPhase] = useState<"answering" | "feedback" | "checkpoint" | "done">("answering");
+  const [phase, setPhase] = useState<"answering" | "feedback" | "checkpoint" | "lap" | "done">("answering");
   const [selected, setSelected] = useState<string | null>(null);
   const [wasCorrect, setWasCorrect] = useState<boolean | null>(null);
   const [presentation, setPresentation] = useState(0);
   const [presented, setPresented] = useState<{ key: string; choices: Choice[] } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [resetArmed, setResetArmed] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   /** Counts captured when a checkpoint fired, so the panel is a snapshot. */
   const [checkpointCounts, setCheckpointCounts] = useState<Counts | null>(null);
 
@@ -263,7 +266,12 @@ export function LearnSession({
     const outcome = applyAnswer(state, question.id, wasCorrect);
     setState(outcome.state);
 
-    if (isComplete(outcome.state)) {
+    if (outcome.state.laps > state.laps) {
+      // The deck has just been cleared. Endless review carries on underneath;
+      // this is a milestone to acknowledge, not the end of the session.
+      setCheckpointCounts(countsFor(outcome.state, questions));
+      setPhase("lap");
+    } else if (isComplete(outcome.state)) {
       setPhase("done");
     } else if (outcome.checkpoint) {
       setCheckpointCounts(countsFor(outcome.state, questions));
@@ -276,6 +284,29 @@ export function LearnSession({
     setSelected(null);
     setWasCorrect(null);
   }, [phase, question, wasCorrect, state, questions]);
+
+  /** Clear stored progress, then start the session over from a clean slate. */
+  const runReset = useCallback(() => {
+    setResetting(true);
+    setResetError(null);
+    startTransition(async () => {
+      try {
+        await resetDeckProgress(deckId);
+        const fresh = questions.map((q) => ({ ...q, progress: null }));
+        setState(createLearnState(fresh, range));
+        setCheckpointCounts(null);
+        setPhase("answering");
+        setSelected(null);
+        setWasCorrect(null);
+        setPresentation((n) => n + 1);
+        setResetArmed(false);
+      } catch (e) {
+        setResetError(e instanceof Error ? e.message : "Could not reset progress.");
+      } finally {
+        setResetting(false);
+      }
+    });
+  }, [deckId, questions, range]);
 
   const restart = useCallback(() => {
     setState(createLearnState(seedQuestions, range));
@@ -309,7 +340,7 @@ export function LearnSession({
         return;
       }
 
-      if (phase === "checkpoint") {
+      if (phase === "checkpoint" || phase === "lap") {
         if (event.key === "Enter" || event.key === " " || event.key === "ArrowRight") {
           event.preventDefault();
           setPhase("answering");
@@ -404,6 +435,52 @@ export function LearnSession({
 
   // ----------------------------------------------------------- checkpoint ---
 
+  if (phase === "lap" && checkpointCounts) {
+    return (
+      <div className="space-y-6">
+        {breadcrumb}
+        <Card className="space-y-6 py-10 text-center">
+          <div className="flex justify-center">
+            <Mascot state="complete" size="lg" replayKey={state.laps} />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              {state.laps > 1 ? `Deck mastered ×${state.laps}` : "Deck Mastered"}
+            </h1>
+            <p className="tabular-nums text-success">
+              {checkpointCounts.total} / {checkpointCounts.total} mastered
+            </p>
+            <p className="mx-auto max-w-sm text-sm text-muted">
+              Learn keeps going from here, bringing back whichever questions you are weakest
+              on rather than stopping.
+            </p>
+          </div>
+          <div className="flex flex-wrap justify-center gap-x-8 gap-y-3">
+            <Stat label="Accuracy" value={`${accuracy(state.answered, state.correct)}%`} />
+            <Stat label="Questions answered" value={state.answered} tone="muted" />
+            <Stat label="Best streak" value={state.bestStreak} tone="accent" />
+          </div>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button size="lg" autoFocus onClick={() => setPhase("answering")}>
+              Keep practising
+            </Button>
+            {state.missed.length > 0 ? (
+              <ButtonLink href={`/decks/${deckId}/learn?ids=${state.missed.join(",")}`} variant="secondary">
+                Review missed
+              </ButtonLink>
+            ) : null}
+            <ButtonLink href={`/decks/${deckId}/quiz`} variant="secondary">
+              Take Quiz
+            </ButtonLink>
+            <ButtonLink href={`/decks/${deckId}`} variant="ghost">
+              Finish for now
+            </ButtonLink>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   if (phase === "checkpoint" && checkpointCounts) {
     return (
       <div className="space-y-6">
@@ -458,7 +535,7 @@ export function LearnSession({
               </span>
             </button>
             {showSettings ? (
-              <div className="mt-4">
+              <div className="mt-4 space-y-5">
                 <RangeSlider
                   label="Questions mastered between checkpoints"
                   min={CHECKPOINT_LIMITS.min}
@@ -466,6 +543,29 @@ export function LearnSession({
                   value={range}
                   onChange={updateRange}
                 />
+
+                <div className="space-y-2 border-t border-line pt-4">
+                  <p className="text-sm font-medium">Reset this deck</p>
+                  <p className="text-xs text-muted">
+                    Sets every question in this deck back to New for you. Mastery, accuracy and
+                    review flags are cleared; starred questions are kept.
+                  </p>
+                  {resetArmed ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="danger" size="sm" disabled={resetting} onClick={runReset}>
+                        {resetting ? "Resetting…" : "Yes, reset everything"}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setResetArmed(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button variant="secondary" size="sm" onClick={() => setResetArmed(true)}>
+                      Reset progress
+                    </Button>
+                  )}
+                  {resetError ? <p className="text-xs text-danger">{resetError}</p> : null}
+                </div>
               </div>
             ) : null}
           </div>

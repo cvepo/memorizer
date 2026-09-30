@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmbeddedFlashcard } from "@/app/(app)/decks/[deckId]/EmbeddedFlashcard";
+import { generateChoices, type Choice } from "@/lib/distractors";
 import { Button, ButtonLink, Card, cn } from "@/components/ui";
 import { touchStudyActivity } from "@/lib/actions/activity";
 import { shuffle } from "@/lib/distractors";
@@ -65,6 +66,10 @@ export function DeckStudy({
   const [filter, setFilter] = useState<Filter>("all");
   const [order, setOrder] = useState<string[]>(deckOrder);
   const [index, setIndex] = useState(0);
+  /** Options for the card on screen. Generated once per card and kept in state:
+   *  generateChoices shuffles, so running it during render would reorder the
+   *  options on every repaint and disagree with the server-rendered HTML. */
+  const [cardChoices, setCardChoices] = useState<{ id: string; choices: Choice[] } | null>(null);
   const [revealed, setRevealed] = useState(false);
 
   const lastTouchAt = useRef(0);
@@ -222,6 +227,12 @@ export function DeckStudy({
 
   const currentId = order[Math.min(index, Math.max(order.length - 1, 0))];
   const current = currentId ? byId.get(currentId) : undefined;
+
+  useEffect(() => {
+    if (!current) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- generateChoices shuffles; doing this during render would break hydration.
+    setCardChoices({ id: current.id, choices: generateChoices(current, questions) });
+  }, [current, questions]);
   if (!current) return null;
 
   const atEnd = index >= order.length - 1;
@@ -255,6 +266,7 @@ export function DeckStudy({
       <div onPointerDown={onPointerDown} onPointerUp={onPointerUp} className="touch-pan-y">
         <EmbeddedFlashcard
           question={current}
+          choices={cardChoices?.id === current.id ? cardChoices.choices : null}
           revealed={revealed}
           onToggle={onToggle}
           starred={starred.has(current.id)}
