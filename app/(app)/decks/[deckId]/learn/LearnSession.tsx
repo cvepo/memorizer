@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { KeyboardHints, type KeyHint } from "@/components/KeyboardHints";
 import { MCQOption, OPTION_LABELS, type OptionState } from "@/components/MCQOption";
 import { Mascot, type MascotState } from "@/components/Mascot";
 import { RangeSlider } from "@/components/RangeSlider";
@@ -33,6 +34,17 @@ const KEY_TO_INDEX: Record<string, number | undefined> = {
 };
 
 const AUTO_ADVANCE_MS = 700;
+
+/** Built from the same table the handler uses, so the legend cannot describe a
+ *  key that is not actually bound. */
+function optionHints(count: number): KeyHint[] {
+  return Array.from({ length: Math.min(count, 4) }, (_, i) => ({
+    keys: [String(i + 1), (OPTION_LABELS[i] ?? "").toLowerCase()],
+    label: `Answer ${OPTION_LABELS[i] ?? i + 1}`,
+  }));
+}
+
+const NEXT_HINT: KeyHint = { keys: ["Enter", "Space", "→"], label: "Next question" };
 const CELEBRATION_STREAK = 5;
 const RANGE_STORAGE_KEY = "memorizer-checkpoint-range";
 /** Stable reference so `useSyncExternalStore` does not loop before the queue exists. */
@@ -640,6 +652,8 @@ export function LearnSession({
           </div>
         </>
       ) : null}
+
+      <KeyboardHints hints={[...optionHints(choices?.length ?? 4), NEXT_HINT]} />
     </div>
   );
 }
