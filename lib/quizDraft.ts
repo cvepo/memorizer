@@ -78,8 +78,31 @@ export function newAttemptId(): string {
 }
 
 /** The event id submitted for one answer: stable across resubmissions. */
+/**
+ * A stable id for "this question, within this attempt".
+ *
+ * It has to be a real UUID — answer_events.id is a uuid column, and a composite
+ * string is rejected by Postgres — and it has to be identical every time the
+ * same attempt is submitted, or a retry would count the answer twice. XORing
+ * the two UUIDs byte-wise gives both: deterministic, valid, and requiring
+ * nothing to be stored or carried between attempts.
+ */
 export function answerEventId(attemptId: string, questionId: string): string {
-  return `${attemptId}:${questionId}`;
+  const hexOf = (id: string) => id.replace(/-/g, "");
+  const a = hexOf(attemptId);
+  const b = hexOf(questionId);
+
+  // Anything that is not a pair of UUIDs cannot be combined this way; fall back
+  // to a fresh id, which is still correct, just not stable across retries.
+  if (a.length !== 32 || b.length !== 32 || !/^[0-9a-f]{32}$/i.test(a) || !/^[0-9a-f]{32}$/i.test(b)) {
+    return newAttemptId();
+  }
+
+  let mixed = "";
+  for (let i = 0; i < 32; i++) {
+    mixed += (parseInt(a[i], 16) ^ parseInt(b[i], 16)).toString(16);
+  }
+  return `${mixed.slice(0, 8)}-${mixed.slice(8, 12)}-${mixed.slice(12, 16)}-${mixed.slice(16, 20)}-${mixed.slice(20)}`;
 }
 
 const isString = (value: unknown): value is string => typeof value === "string";

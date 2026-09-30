@@ -104,7 +104,11 @@ export async function submitQuiz(
       total_questions: total,
       percentage,
       started_at: startedAt,
-      completed_at: new Date().toISOString(),
+      // Deliberately not completed yet. It is marked complete only once the
+      // answers and the mastery updates have both landed, so a failure here
+      // leaves a retry able to finish the job rather than short-circuiting on
+      // an attempt that merely looks done.
+      completed_at: null,
     })
     .select("id")
     .single();
@@ -145,6 +149,13 @@ export async function submitQuiz(
       if (progressError) throw new Error(progressError.message);
     }
   }
+
+  // Everything is stored; only now does the attempt count as finished.
+  const { error: finishError } = await db
+    .from("quiz_attempts")
+    .update({ completed_at: new Date().toISOString() })
+    .eq("id", attempt.id);
+  if (finishError) throw new Error(finishError.message);
 
   return attempt.id;
 }
