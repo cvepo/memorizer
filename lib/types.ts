@@ -169,6 +169,21 @@ type BelongsTo<N extends string, C extends string, R extends string> = {
   referencedColumns: ["id"];
 };
 
+export type AchievementRow = {
+  id: string;
+  profile_id: string;
+  badge_key: string;
+  earned_at: string;
+  acknowledged_at: string | null;
+  backfilled: boolean;
+};
+
+export type ProfileStatsRow = {
+  profile_id: string;
+  lifetime_correct: number;
+  updated_at: string;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -215,6 +230,11 @@ export type Database = {
           BelongsTo<"study_activity_deck_id_fkey", "deck_id", "decks">,
         ]
       >;
+      achievements: Row<
+        AchievementRow,
+        [BelongsTo<"achievements_profile_id_fkey", "profile_id", "profiles">]
+      >;
+      profile_stats: Row<ProfileStatsRow>;
     };
     Views: Record<never, never>;
     Functions: {

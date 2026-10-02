@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 
 import { requireSession } from "@/lib/auth";
+import type { EarnedBadge } from "@/lib/badges";
+import { getPendingBadges } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 /** Record one Learn answer. Any signed-in profile may do this. */
@@ -28,13 +30,18 @@ export type PendingAnswer = {
  * retries after a failure — or after a refresh — cannot count an answer twice.
  * Returns the ids the server accepted, which is every id it has now seen,
  * including ones it had already stored, so the client can clear its queue.
+ *
+ * Learn also gets the badges still waiting to be celebrated. They are read after
+ * the write rather than taken from it, so a badge whose earlier response was
+ * lost is returned here too. Quizzes never receive them: they are held back for
+ * the results screen.
  */
 export async function recordAnswers(
   answers: PendingAnswer[],
   source: "learn" | "quiz" = "learn",
-): Promise<{ acknowledged: string[] }> {
+): Promise<{ acknowledged: string[]; pendingBadges: EarnedBadge[] }> {
   const session = await requireSession();
-  if (answers.length === 0) return { acknowledged: [] };
+  if (answers.length === 0) return { acknowledged: [], pendingBadges: [] };
 
   const { error } = await supabase().rpc("record_answers_once", {
     p_profile_id: session.profileId,
@@ -47,7 +54,12 @@ export async function recordAnswers(
   });
   if (error) throw new Error(error.message);
 
-  return { acknowledged: answers.map((a) => a.eventId) };
+  // A failure to read badges must not make the client think its answers were
+  // not saved, so it degrades to "nothing to celebrate right now".
+  const pendingBadges =
+    source === "learn" ? await getPendingBadges(session.profileId).catch(() => []) : [];
+
+  return { acknowledged: answers.map((a) => a.eventId), pendingBadges };
 }
 
 export type SubmittedQuizAnswer = {
