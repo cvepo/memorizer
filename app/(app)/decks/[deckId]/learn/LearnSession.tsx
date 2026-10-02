@@ -9,8 +9,11 @@ import { Mascot, type MascotState } from "@/components/Mascot";
 import { RangeSlider } from "@/components/RangeSlider";
 import { SaveStatus } from "@/components/SaveStatus";
 import { StarButton } from "@/components/StarButton";
+import { BadgeCelebration } from "@/components/BadgeCelebration";
 import { Button, ButtonLink, Card, ProgressBar, Stat, cn } from "@/components/ui";
+import { getPendingBadges } from "@/lib/actions/badges";
 import { recordAnswers, resetDeckProgress } from "@/lib/actions/study";
+import type { EarnedBadge } from "@/lib/badges";
 import { AnswerQueue, newEventId, type QueueStatus } from "@/lib/answerQueue";
 import { generateChoices, maxAvailableChoices, type Choice } from "@/lib/distractors";
 import {
@@ -82,14 +85,7 @@ function LevelCounts({ counts, className }: { counts: Counts; className?: string
   );
 }
 
-export function LearnSession({
-  deckId,
-  deckName,
-  questions,
-  profileId,
-  starredIds,
-  focusedReview = false,
-}: {
+type LearnSessionProps = {
   deckId: string;
   deckName: string;
   questions: StudyQuestion[];
@@ -97,7 +93,55 @@ export function LearnSession({
   starredIds: string[];
   /** The caller picked these questions by id, so already-mastered ones belong in the pool. */
   focusedReview?: boolean;
-}) {
+};
+
+/**
+ * Wraps the session with the badge celebration. Badges waiting from earlier are
+ * fetched when the session opens; new ones arrive with each saved answer. The
+ * celebration owns showing each badge once and marking it seen.
+ */
+export function LearnSession(props: LearnSessionProps) {
+  const [badges, setBadges] = useState<EarnedBadge[]>([]);
+
+  const addBadges = useCallback((incoming: EarnedBadge[]) => {
+    setBadges((current) => {
+      const known = new Set(current.map((b) => b.key));
+      const added = incoming.filter((b) => !known.has(b.key));
+      return added.length > 0 ? [...current, ...added] : current;
+    });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    getPendingBadges()
+      .then((pending) => {
+        if (active) addBadges(pending);
+      })
+      .catch(() => {
+        // Badges are a bonus; a failed read must never get in the way of studying.
+      });
+    return () => {
+      active = false;
+    };
+  }, [addBadges]);
+
+  return (
+    <>
+      <LearnSessionView {...props} onBadges={addBadges} />
+      <BadgeCelebration badges={badges} />
+    </>
+  );
+}
+
+function LearnSessionView({
+  deckId,
+  deckName,
+  questions,
+  profileId,
+  starredIds,
+  focusedReview = false,
+  onBadges,
+}: LearnSessionProps & { onBadges: (badges: EarnedBadge[]) => void }) {
   const byId = useMemo(() => new Map(questions.map((q) => [q.id, q])), [questions]);
 
   /**
@@ -167,13 +211,13 @@ export function LearnSession({
    */
   const getQueue = useCallback(() => {
     if (!queueRef.current) {
-      const queue = new AnswerQueue(profileId, (answers) => recordAnswers(answers, "learn"));
+      const queue = new AnswerQueue(profileId, (answers) => recordAnswers(answers, "learn"), onBadges);
       queueRef.current = queue;
       // Answers stored before a refresh or a crash are still owed to the server.
       if (queue.pendingCount > 0) void queue.flush();
     }
     return queueRef.current;
-  }, [profileId]);
+  }, [profileId, onBadges]);
 
   useEffect(
     () => () => {

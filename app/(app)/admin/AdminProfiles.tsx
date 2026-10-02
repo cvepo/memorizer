@@ -5,6 +5,7 @@ import { startTransition, useState } from "react";
 
 import { Badge, Button, Card, ProgressBar, cn } from "@/components/ui";
 import { deleteProfile } from "@/lib/actions/activity";
+import { BADGE_EMOJI, BADGE_TIERS } from "@/lib/badges";
 import type { ProfileOverview } from "@/lib/data";
 
 function relativeTime(iso: string | null): string {
@@ -140,6 +141,18 @@ export function AdminProfiles({
 
             {open ? (
               <div className="space-y-4 border-t border-line p-4">
+                <p className="text-sm">
+                  <span className="text-muted">Badges: </span>
+                  {profile.badges.length === 0
+                    ? "none yet"
+                    : BADGE_TIERS.filter((t) => profile.badges.some((b) => b.key === t.key))
+                        .map((t) => `${BADGE_EMOJI} ${t.name}`)
+                        .join(" · ")}
+                  <span className="text-muted tabular-nums">
+                    {" "}
+                    ({profile.lifetimeCorrect.toLocaleString()} correct all time)
+                  </span>
+                </p>
                 {studiedDecks.length === 0 ? (
                   <p className="text-sm text-muted">
                     {profile.name} hasn&rsquo;t studied anything yet.

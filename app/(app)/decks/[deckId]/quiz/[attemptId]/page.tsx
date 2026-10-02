@@ -1,8 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 
+import { BadgeCelebration } from "@/components/BadgeCelebration";
 import { ButtonLink, Card, PageHeader, cn } from "@/components/ui";
 import { getSession } from "@/lib/auth";
-import { getDeck, getQuizAttempt } from "@/lib/data";
+import { getDeck, getPendingBadges, getQuizAttempt } from "@/lib/data";
 
 export async function generateMetadata({ params }: PageProps<"/decks/[deckId]/quiz/[attemptId]">) {
   const { deckId } = await params;
@@ -23,7 +24,11 @@ export default async function QuizResultsPage({
   if (!result || result.attempt.deck_id !== deckId) notFound();
 
   const { attempt, answers } = result;
-  const deck = await getDeck(deckId);
+  const [deck, pendingBadges] = await Promise.all([
+    getDeck(deckId),
+    // Badges earned by a quiz are held back until here so they never interrupt it.
+    getPendingBadges(session.profileId).catch(() => []),
+  ]);
 
   const correctCount = answers.filter((a) => a.was_correct).length;
   const incorrectCount = answers.length - correctCount;
@@ -34,6 +39,7 @@ export default async function QuizResultsPage({
 
   return (
     <div className="space-y-6">
+      <BadgeCelebration badges={pendingBadges} />
       <PageHeader title="Quiz results" subtitle={deck?.name ?? undefined} />
 
       <Card className="flex flex-col items-center gap-2 py-8 text-center">
