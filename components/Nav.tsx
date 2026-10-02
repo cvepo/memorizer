@@ -16,6 +16,7 @@ const LINKS = [
   { href: "/decks", label: "Decks" },
   { href: "/search", label: "Search" },
   { href: "/starred", label: "Starred" },
+  { href: "/badges", label: "Badges" },
   { href: "/import", label: "Import" },
   { href: "/admin", label: "Admin" },
 ];
