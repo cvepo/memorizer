@@ -1,7 +1,9 @@
 import "server-only";
 
+import type { EarnedBadge } from "@/lib/badges";
 import { supabase } from "@/lib/supabase";
 import type {
+  AchievementRow,
   Course,
   Deck,
   DeckReviewCounts,
@@ -401,6 +403,8 @@ export type ProfileOverview = {
     quizzes: number;
   };
   decks: ProfileDeckRow[];
+  lifetimeCorrect: number;
+  badges: EarnedBadge[];
 };
 
 /**
@@ -414,7 +418,7 @@ export type ProfileOverview = {
 export async function profileOverviews(): Promise<ProfileOverview[]> {
   const db = supabase();
 
-  const [profiles, decks, questions, progress, activity, attempts, stars] = await Promise.all([
+  const [profiles, decks, questions, progress, activity, attempts, stars, stats, achievements] = await Promise.all([
     db.from("profiles").select("*").order("created_at"),
     db.from("decks").select("id, name, course:courses(name)"),
     db.from("questions").select("id, deck_id"),
@@ -427,6 +431,8 @@ export async function profileOverviews(): Promise<ProfileOverview[]> {
       .select("profile_id, deck_id, percentage, completed_at")
       .not("completed_at", "is", null),
     db.from("starred_questions").select("profile_id, question_id"),
+    db.from("profile_stats").select("profile_id, lifetime_correct"),
+    db.from("achievements").select("*"),
   ]);
 
   const deckOf = new Map<string, string>();
@@ -521,6 +527,65 @@ export async function profileOverviews(): Promise<ProfileOverview[]> {
       null,
     );
 
-    return { id: profile.id, name: profile.name, createdAt: profile.created_at, lastStudiedAt, totals, decks: deckRows };
+    const lifetimeCorrect = Number(
+      ((stats.data ?? []) as { profile_id: string; lifetime_correct: number }[]).find(
+        (s) => s.profile_id === profile.id,
+      )?.lifetime_correct ?? 0,
+    );
+    const badges = ((achievements.data ?? []) as AchievementRow[])
+      .filter((a) => a.profile_id === profile.id)
+      .map(toEarnedBadge);
+
+    return {
+      id: profile.id,
+      name: profile.name,
+      createdAt: profile.created_at,
+      lastStudiedAt,
+      totals,
+      decks: deckRows,
+      lifetimeCorrect,
+      badges,
+    };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Badges
+// ---------------------------------------------------------------------------
+
+function toEarnedBadge(row: AchievementRow): EarnedBadge {
+  return {
+    key: row.badge_key,
+    earnedAt: row.earned_at,
+    backfilled: row.backfilled,
+    acknowledged: row.acknowledged_at !== null,
+  };
+}
+
+/** A profile's lifetime correct counter and every badge it has earned. */
+export async function getBadgeState(
+  profileId: string,
+): Promise<{ lifetimeCorrect: number; badges: EarnedBadge[] }> {
+  const db = supabase();
+  const [stats, achievements] = await Promise.all([
+    db.from("profile_stats").select("lifetime_correct").eq("profile_id", profileId).maybeSingle(),
+    db.from("achievements").select("*").eq("profile_id", profileId).order("earned_at"),
+  ]);
+  return {
+    lifetimeCorrect: Number(unwrap(stats)?.lifetime_correct ?? 0),
+    badges: ((unwrap(achievements) ?? []) as AchievementRow[]).map(toEarnedBadge),
+  };
+}
+
+/** Badges this profile has earned but not yet seen a celebration for. */
+export async function getPendingBadges(profileId: string): Promise<EarnedBadge[]> {
+  const rows = unwrap(
+    await supabase()
+      .from("achievements")
+      .select("*")
+      .eq("profile_id", profileId)
+      .is("acknowledged_at", null)
+      .order("earned_at"),
+  );
+  return ((rows ?? []) as AchievementRow[]).map(toEarnedBadge);
 }
