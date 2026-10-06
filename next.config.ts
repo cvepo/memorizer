@@ -24,7 +24,33 @@ const csp = [
   "object-src 'none'",
 ].join("; ");
 
+/**
+ * Served at enzohiu.com/memorizer, which the portfolio project proxies through
+ * to this deployment — the same arrangement recruitingos and pokefolio use. The
+ * base path makes every route, asset and link carry the prefix so the proxy can
+ * forward them unchanged.
+ */
+const BASE_PATH = "/memorizer";
+
 const nextConfig: NextConfig = {
+  basePath: BASE_PATH,
+
+  experimental: {
+    /**
+     * Behind the proxy the browser's Origin is the portfolio's domain while this
+     * app answers on its own, so Server Actions would be rejected as
+     * cross-origin without naming the hosts that are allowed to reach them.
+     */
+    serverActions: {
+      allowedOrigins: [
+        "enzohiu.com",
+        "www.enzohiu.com",
+        "memorizer-gamma.vercel.app",
+        "localhost:3000",
+      ],
+    },
+  },
+
   async headers() {
     return [
       {

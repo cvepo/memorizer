@@ -19,15 +19,26 @@ export default async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const result = await readSession(request.cookies.get(SESSION_COOKIE)?.value);
 
+  // Redirects are built from nextUrl, not `new URL(..., request.url)`: this app
+  // is served under a base path and only NextURL carries it, so a plain URL
+  // would send people to /login instead of /memorizer/login.
   if (pathname === "/login") {
-    if (result) return NextResponse.redirect(new URL("/", request.url));
+    if (result) {
+      const home = request.nextUrl.clone();
+      home.pathname = "/";
+      home.search = "";
+      return NextResponse.redirect(home);
+    }
     return NextResponse.next();
   }
 
   if (!result) {
-    const url = new URL("/login", request.url);
-    if (pathname !== "/") url.searchParams.set("next", pathname + search);
-    return NextResponse.redirect(url);
+    const login = request.nextUrl.clone();
+    login.pathname = "/login";
+    login.search = "";
+    // The target is stored without the base path; redirect() adds it back.
+    if (pathname !== "/") login.searchParams.set("next", pathname + search);
+    return NextResponse.redirect(login);
   }
 
   const response = NextResponse.next();
