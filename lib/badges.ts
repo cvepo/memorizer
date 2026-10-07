@@ -58,7 +58,7 @@ export type EarnedBadge = {
 
 /** Ring colour per tone. The star emoji keeps its own colour, so the tier shows in the ring. */
 export const TONE_RING: Record<BadgeTone, string> = {
-  bronze: "border-[#c77d3a]",
-  silver: "border-[#a8b3c4]",
+  bronze: "border-bronze",
+  silver: "border-silver",
   gold: "border-star",
 };

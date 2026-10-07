@@ -68,7 +68,11 @@ export function BadgeCelebration({ badges }: { badges: EarnedBadge[] }) {
               </p>
               <p className="text-sm text-muted">
                 Your past correct answers count. See them on the{" "}
-                <Link href="/badges" className="text-accent underline" onClick={dismiss}>
+                <Link
+                  href="/badges"
+                  className="inline-flex min-h-11 items-center text-accent underline"
+                  onClick={dismiss}
+                >
                   Badges page
                 </Link>
                 .
@@ -93,7 +97,7 @@ export function BadgeCelebration({ badges }: { badges: EarnedBadge[] }) {
                   <div className="min-w-0">
                     <p className="font-semibold">🎉 New badge: {tier.name}</p>
                     <p className="text-sm text-muted">
-                      {tier.threshold.toLocaleString()} correct answers!
+                      {tier.threshold.toLocaleString("en-US")} correct answers!
                     </p>
                   </div>
                 </li>
@@ -102,7 +106,7 @@ export function BadgeCelebration({ badges }: { badges: EarnedBadge[] }) {
           </ul>
         )}
         <div className="flex justify-end">
-          <Button size="sm" variant="secondary" onClick={dismiss}>
+          <Button size="md" variant="secondary" onClick={dismiss}>
             Dismiss
           </Button>
         </div>
