@@ -31,6 +31,8 @@
   --danger: #f23f42;
   --danger-fg: #ffffff;
   --star: #e8b931;
+  --bronze: #cd7f32;
+  --silver: #b8c2d1;
   --ring: rgba(88, 101, 242, 0.55);
 }
 
@@ -53,6 +55,8 @@
     --danger: #cf2c30;
     --danger-fg: #ffffff;
     --star: #b47b06;
+    --bronze: #a35f1b;
+    --silver: #7a8597;
     --ring: rgba(75, 88, 230, 0.45);
   }
 }
@@ -74,6 +78,8 @@
   --danger: #cf2c30;
   --danger-fg: #ffffff;
   --star: #b47b06;
+  --bronze: #a35f1b;
+  --silver: #7a8597;
   --ring: rgba(75, 88, 230, 0.45);
 }
 
@@ -94,6 +100,8 @@
   --color-danger: var(--danger);
   --color-danger-fg: var(--danger-fg);
   --color-star: var(--star);
+  --color-bronze: var(--bronze);
+  --color-silver: var(--silver);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 

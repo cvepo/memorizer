@@ -1,6 +1,7 @@
 "use client";
 
 import type { PendingAnswer } from "@/lib/actions/study";
+import type { EarnedBadge } from "@/lib/badges";
 
 /**
  * A durable queue for graded answers.
@@ -79,7 +80,9 @@ export function newEventId(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
 }
 
-type Send = (answers: PendingAnswer[]) => Promise<{ acknowledged: string[] }>;
+type Send = (
+  answers: PendingAnswer[],
+) => Promise<{ acknowledged: string[]; pendingBadges?: EarnedBadge[] }>;
 
 export class AnswerQueue {
   private queue: QueuedAnswer[] = [];
@@ -93,6 +96,8 @@ export class AnswerQueue {
   constructor(
     private readonly profileId: string,
     private readonly send: Send,
+    /** Called with the badges still waiting to be celebrated after a successful flush. */
+    private readonly onBadges?: (badges: EarnedBadge[]) => void,
   ) {
     this.storageWorks = canUseStorage();
     if (this.storageWorks) this.queue = read(profileId);
@@ -173,9 +178,10 @@ export class AnswerQueue {
     this.emit({ kind: "saving", pending: batch.length });
 
     try {
-      const { acknowledged } = await this.send(
+      const { acknowledged, pendingBadges } = await this.send(
         batch.map(({ eventId, questionId, wasCorrect }) => ({ eventId, questionId, wasCorrect })),
       );
+      if (pendingBadges && pendingBadges.length > 0) this.onBadges?.(pendingBadges);
       const done = new Set(acknowledged);
       // Anything queued while the request was in flight stays put.
       this.queue = this.queue.filter((a) => !done.has(a.eventId));
