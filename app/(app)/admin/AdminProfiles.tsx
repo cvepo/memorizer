@@ -150,7 +150,7 @@ export function AdminProfiles({
                         .join(" · ")}
                   <span className="text-muted tabular-nums">
                     {" "}
-                    ({profile.lifetimeCorrect.toLocaleString()} correct all time)
+                    ({profile.lifetimeCorrect.toLocaleString("en-US")} correct all time)
                   </span>
                 </p>
                 {studiedDecks.length === 0 ? (

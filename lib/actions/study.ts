@@ -7,17 +7,6 @@ import type { EarnedBadge } from "@/lib/badges";
 import { getPendingBadges } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
-/** Record one Learn answer. Any signed-in profile may do this. */
-export async function recordAnswer(questionId: string, wasCorrect: boolean): Promise<void> {
-  const session = await requireSession();
-  const { error } = await supabase().rpc("record_answer", {
-    p_profile_id: session.profileId,
-    p_question_id: questionId,
-    p_correct: wasCorrect,
-  });
-  if (error) throw new Error(error.message);
-}
-
 export type PendingAnswer = {
   /** Generated on the client before sending, so a retry is recognisable. */
   eventId: string;

@@ -34,7 +34,7 @@ export default async function BadgesPage() {
       />
 
       <div className="flex flex-wrap gap-x-8 gap-y-3">
-        <Stat label="Correct answers" value={lifetimeCorrect.toLocaleString()} tone="success" />
+        <Stat label="Correct answers" value={lifetimeCorrect.toLocaleString("en-US")} tone="success" />
         <Stat label="Badges earned" value={`${badges.length} / ${BADGE_TIERS.length}`} />
       </div>
 
@@ -44,7 +44,7 @@ export default async function BadgesPage() {
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <p className="font-medium">Next badge: {next.name}</p>
               <p className="text-sm text-muted tabular-nums">
-                {lifetimeCorrect.toLocaleString()} / {next.threshold.toLocaleString()}
+                {lifetimeCorrect.toLocaleString("en-US")} / {next.threshold.toLocaleString("en-US")}
               </p>
             </div>
             <ProgressBar value={lifetimeCorrect - from} total={next.threshold - from} tone="accent" />
@@ -72,7 +72,7 @@ export default async function BadgesPage() {
                 <div className="min-w-0">
                   <p className="font-semibold">{tier.name}</p>
                   <p className="text-sm text-muted">
-                    {tier.threshold.toLocaleString()} correct answers
+                    {tier.threshold.toLocaleString("en-US")} correct answers
                   </p>
                   <p className="text-xs text-muted">
                     {badge
