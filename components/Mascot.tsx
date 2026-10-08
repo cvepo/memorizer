@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { cn } from "@/components/ui";
+import { animationsDisabled, subscribeMotion } from "@/lib/motion";
 
 /* ---------------------------------------------------------------------------
    A small black cat that reacts to what just happened in the study flow.
@@ -11,11 +12,11 @@ import { cn } from "@/components/ui";
    the silhouette stays readable on the dark UI and the rim doubles as the
    state's colour (green for correct, red for wrong, blurple for milestones).
 
-   Motion runs through the Web Animations API rather than CSS keyframes for two
-   reasons: it replays on demand (see `replayKey`), and it sidesteps the global
-   reduced-motion rule in globals.css, which flattens CSS animation durations
-   for everything that is not a `[data-card-enter]` element. Reduced motion is
-   therefore honoured here explicitly, in JS.
+   Motion runs through the Web Animations API rather than CSS keyframes because
+   it replays on demand (see `replayKey`). CSS cannot reach it, so the global
+   "no animations" rule in globals.css does not apply here: whether animations
+   are disabled, by the device or by the app's own switch, is checked in JS
+   (lib/motion.ts), and a running animation is cancelled if that changes.
 --------------------------------------------------------------------------- */
 
 export type MascotState =
@@ -112,17 +113,6 @@ const MOTIONS: Record<MascotState, Motion | null> = {
     options: { duration: 700, easing: "ease-in-out" },
   },
 };
-
-function prefersReducedMotion(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  try {
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  } catch {
-    return false;
-  }
-}
 
 /** A four-point sparkle centred on (cx, cy). */
 function sparkle(cx: number, cy: number, r: number): string {
@@ -244,10 +234,24 @@ export function Mascot({
     const motion = MOTIONS[state];
     if (!node || !motion) return;
     if (typeof node.animate !== "function") return;
-    if (prefersReducedMotion()) return;
 
-    const animation = node.animate(motion.frames, motion.options);
-    return () => animation.cancel();
+    let animation: Animation | null = animationsDisabled()
+      ? null
+      : node.animate(motion.frames, motion.options);
+
+    // If animations are switched off while this one is running, stop it at once;
+    // cancelling drops the animated styles and leaves the mascot at rest.
+    const unsubscribe = subscribeMotion(() => {
+      if (animationsDisabled() && animation) {
+        animation.cancel();
+        animation = null;
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      animation?.cancel();
+    };
   }, [state, replayKey]);
 
   return (
