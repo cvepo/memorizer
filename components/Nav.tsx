@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 import { Badge, cn } from "@/components/ui";
+import { MotionToggle } from "@/components/MotionToggle";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { signOut } from "@/lib/actions/auth";
 
@@ -53,6 +54,7 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
 
         <div className="ml-auto flex items-center gap-3">
           <div className="hidden items-center gap-3 lg:flex">
+            <MotionToggle />
             <ThemeToggle />
             <Link href="/profile" className="text-sm text-muted hover:text-ink" title="Switch profile">
               {profileName}
@@ -96,6 +98,9 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
           <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
             <span className="text-sm font-medium text-ink">Theme</span>
             <ThemeToggle />
+          </div>
+          <div className="mt-3 border-t border-line pt-3">
+            <MotionToggle variant="menu" />
           </div>
           <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
             <Link href="/profile" className="flex min-h-11 items-center text-sm text-muted">

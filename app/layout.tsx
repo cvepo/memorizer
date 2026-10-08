@@ -18,7 +18,7 @@ export const viewport: Viewport = {
 };
 
 /**
- * Applies the stored theme before first paint. Without this the page renders in
+ * Applies the stored theme and animation choice before first paint. Without this the page renders in
  * the system palette and then snaps to the chosen one, which is a visible flash
  * on every navigation.
  */
@@ -26,6 +26,7 @@ const themeScript = `
 try {
   var t = localStorage.getItem("memorizer-theme");
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  if (localStorage.getItem("memorizer-motion") === "reduce") document.documentElement.setAttribute("data-motion", "reduce");
 } catch (e) {}
 `;
 

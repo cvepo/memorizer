@@ -166,7 +166,8 @@ body {
 
 /* The text of a new flashcard slides in a few pixels as it arrives. It never
    starts fully transparent, because that reads as a flash rather than as
-   movement. */
+   movement. It is removed whenever animations are disabled (see the end of
+   this file). */
 @keyframes card-enter {
   from {
     opacity: 0.15;
@@ -178,31 +179,28 @@ body {
   }
 }
 
-@keyframes card-enter-fade {
-  from {
-    opacity: 0.25;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
 [data-card-enter] {
   animation: card-enter 220ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* Honour "Reduce Motion" for everything, with one exception: the card that
-   just arrived still needs to announce itself, so its movement becomes a plain
-   fade rather than disappearing entirely. */
+/* One rule for "no animations": the person turned them off in the app (see
+   lib/motion.ts), or the device's Reduce Motion is on. Either way everything
+   stops, including the new-card slide above, so a card simply replaces the
+   previous one. The saved in-app choice is never touched by the device setting. */
 @media (prefers-reduced-motion: reduce) {
-  *:not([data-card-enter]),
-  *:not([data-card-enter])::before,
-  *:not([data-card-enter])::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
+}
 
-  [data-card-enter] {
-    animation: card-enter-fade 160ms linear !important;
-  }
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] *::before,
+:root[data-motion="reduce"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
 }
