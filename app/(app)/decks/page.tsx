@@ -48,7 +48,7 @@ export default async function DecksPage() {
           action={isAdmin ? <ButtonLink href="/import">Import questions</ButtonLink> : undefined}
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {sortedDecks.map((deck) => (
             <DeckCard
               key={deck.id}

@@ -64,7 +64,7 @@ export default async function CoursePage({ params }: PageProps<"/courses/[course
           description={isAdmin ? "Add a deck below to get started." : "Once an admin adds a deck it will show up here."}
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {decks.map((deck) => (
             <DeckCard
               key={deck.id}
