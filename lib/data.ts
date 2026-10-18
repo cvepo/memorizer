@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { EarnedBadge } from "@/lib/badges";
+import { DEFAULT_CHECKPOINT, normalizeCheckpoint, type CheckpointSetting } from "@/lib/learnAlgorithm";
 import { supabase } from "@/lib/supabase";
 import type {
   AchievementRow,
@@ -46,6 +47,27 @@ export async function findOrCreateProfile(name: string): Promise<Profile> {
 export async function getProfile(id: string): Promise<Profile | null> {
   const { data } = await supabase().from("profiles").select("*").eq("id", id).maybeSingle();
   return data ?? null;
+}
+
+/** This profile's saved Learn preferences, or the defaults when none are stored. */
+export async function getCheckpointSetting(profileId: string): Promise<CheckpointSetting> {
+  const { data, error } = await supabase()
+    .from("profile_settings")
+    .select("checkpoint_length, checkpoint_jitter")
+    .eq("profile_id", profileId)
+    .maybeSingle();
+
+  // The app can reach production before the SQL editor migration is applied.
+  if (error && error.code !== "PGRST205" && error.code !== "42P01") {
+    throw new Error(error.message);
+  }
+
+  return normalizeCheckpoint(
+    data
+      ? { length: data.checkpoint_length, jitter: data.checkpoint_jitter }
+      : DEFAULT_CHECKPOINT,
+    Number.MAX_SAFE_INTEGER,
+  );
 }
 
 // ---------------------------------------------------------------------------

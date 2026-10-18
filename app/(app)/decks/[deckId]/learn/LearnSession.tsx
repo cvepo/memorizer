@@ -13,13 +13,13 @@ import { StarButton } from "@/components/StarButton";
 import { BadgeCelebration } from "@/components/BadgeCelebration";
 import { Button, ButtonLink, Card, ProgressBar, Stat, cn } from "@/components/ui";
 import { getPendingBadges } from "@/lib/actions/badges";
+import { saveCheckpointSetting } from "@/lib/actions/settings";
 import { recordAnswers, resetDeckProgress } from "@/lib/actions/study";
 import type { EarnedBadge } from "@/lib/badges";
 import { AnswerQueue, newEventId, type QueueStatus } from "@/lib/answerQueue";
 import { generateChoices, maxAvailableChoices, type Choice } from "@/lib/distractors";
 import {
   CHECKPOINT_MIN,
-  DEFAULT_CHECKPOINT,
   MASTERY_MASTERED,
   POOL_SIZE,
   applyAnswer,
@@ -53,17 +53,97 @@ function optionHints(count: number): KeyHint[] {
 
 const NEXT_HINT: KeyHint = { keys: ["Enter", "Space", "→"], label: "Next question" };
 const CELEBRATION_STREAK = 5;
-/** Original key, kept so a saved { min, max } is still there to migrate. */
-const LENGTH_STORAGE_KEY = "memorizer-checkpoint-range";
 
 /**
- * Per person, not per deck. Same shape as the flashcard position key, without
- * a deck id: varying checkpoints is how you like to study, not a property of
- * one deck. Profile settings write this same key.
+ * checkpointMaxFor switches to the wider maximum once a deck passes 100
+ * questions. Infinity is past that cutoff, so moving a preference onto the
+ * profile does not clip a large-deck length down to the small-deck maximum.
  */
-function jitterStorageKey(profileId: string) {
+const PREFERENCE_DECK_SIZE = Number.POSITIVE_INFINITY;
+
+/** Length key from before this setting lived on the profile. It has no profile id. */
+const LEGACY_LENGTH_KEY = "memorizer-checkpoint-range";
+
+function legacyJitterKey(profileId: string) {
   return `memorizer-checkpoint-jitter:${profileId}`;
 }
+
+function parseStoredJson(raw: string | null): unknown {
+  if (raw === null) return undefined;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nonNegativeNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/** The previous slider stored { min, max } and not a length. */
+function isLegacyRange(value: unknown): boolean {
+  if (!isRecord(value) || !("min" in value) || !("max" in value) || "length" in value) return false;
+  const min = nonNegativeNumber(value.min);
+  const max = nonNegativeNumber(value.max);
+  return min !== null && max !== null && max >= min;
+}
+
+function forgetLegacyCheckpoint(profileId: string) {
+  try {
+    localStorage.removeItem(LEGACY_LENGTH_KEY);
+    localStorage.removeItem(legacyJitterKey(profileId));
+  } catch {
+    // Private mode. After a successful save the profile already has the value.
+  }
+}
+
+/**
+ * One-time read of a checkpoint saved in this browser before it lived on the
+ * profile. Null means nothing usable was stored, so the profile row is left
+ * as it is. A partial { length } handed to normalizeCheckpoint on its own is
+ * treated as invalid, so both fields are filled before that call.
+ *
+ * Keep this in step with CheckpointPreference.
+ */
+function readLegacyCheckpoint(profileId: string, fallback: CheckpointSetting): CheckpointSetting | null {
+  let rawLength: string | null;
+  let rawJitter: string | null;
+  try {
+    rawLength = localStorage.getItem(LEGACY_LENGTH_KEY);
+    rawJitter = localStorage.getItem(legacyJitterKey(profileId));
+  } catch {
+    return null;
+  }
+  if (rawLength === null && rawJitter === null) return null;
+
+  const storedLength = parseStoredJson(rawLength);
+  const storedJitter = nonNegativeNumber(parseStoredJson(rawJitter));
+  const legacy = isLegacyRange(storedLength);
+  const migrated = legacy ? normalizeCheckpoint(storedLength, PREFERENCE_DECK_SIZE) : null;
+  const explicitLength = !legacy && isRecord(storedLength) ? nonNegativeNumber(storedLength.length) : null;
+
+  if (migrated === null && explicitLength === null && storedJitter === null) {
+    // Present, but nothing we can adopt. Drop the keys so this does not retry every visit.
+    forgetLegacyCheckpoint(profileId);
+    return null;
+  }
+
+  return normalizeCheckpoint(
+    {
+      length: migrated?.length ?? explicitLength ?? fallback.length,
+      // A non-finite jitter must not be passed through: normalizeCheckpoint
+      // rejects the whole setting, which would throw away a valid length.
+      jitter: storedJitter ?? migrated?.jitter ?? fallback.jitter,
+    },
+    PREFERENCE_DECK_SIZE,
+  );
+}
+
 /** Stable reference so `useSyncExternalStore` does not loop before the queue exists. */
 const IDLE_SAVE: QueueStatus = { kind: "idle" };
 
@@ -108,80 +188,6 @@ function removeFromLearnPool(state: LearnState, questionId: string): LearnState 
     missed: state.missed.filter((id) => id !== questionId),
     masteredThisSession: state.masteredThisSession.filter((id) => id !== questionId),
   };
-}
-
-function readJson(key: string): unknown {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw === null) return undefined;
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** The previous slider stored { min, max } on the length key. */
-function isLegacyRange(value: unknown): boolean {
-  return isRecord(value) && "min" in value && "max" in value && !("length" in value);
-}
-
-function writeStoredLength(length: number) {
-  try {
-    localStorage.setItem(LENGTH_STORAGE_KEY, JSON.stringify({ length }));
-  } catch {
-    // Private mode: the choice applies now but will not persist.
-  }
-}
-
-function writeStoredJitter(profileId: string, jitter: number) {
-  try {
-    localStorage.setItem(jitterStorageKey(profileId), JSON.stringify(jitter));
-  } catch {
-    // Private mode: the choice applies now but will not persist.
-  }
-}
-
-/**
- * Length stays on the original key so a saved { min, max } is migrated
- * rather than dropped. A jitter this profile has saved replaces the spread
- * that migration would invent.
- *
- * Keep this in step with CheckpointPreference. A partial { length } handed
- * to normalizeCheckpoint on its own is treated as invalid, so both fields
- * are filled in first.
- */
-function readStoredCheckpoint(profileId: string, deckSize: number): {
-  setting: CheckpointSetting;
-  legacy: boolean;
-} {
-  const storedLength = readJson(LENGTH_STORAGE_KEY);
-  const storedJitter = readJson(jitterStorageKey(profileId));
-  const legacy = isLegacyRange(storedLength);
-
-  if (legacy && typeof storedJitter !== "number") {
-    return { setting: normalizeCheckpoint(storedLength, deckSize), legacy };
-  }
-
-  const migrated = legacy ? normalizeCheckpoint(storedLength, deckSize) : null;
-  const length =
-    migrated?.length ??
-    (isRecord(storedLength) &&
-    typeof storedLength.length === "number" &&
-    Number.isFinite(storedLength.length)
-      ? storedLength.length
-      : DEFAULT_CHECKPOINT.length);
-  // A non-finite jitter must not be passed through: normalizeCheckpoint
-  // rejects the whole setting, which would throw away a valid length.
-  const jitter =
-    typeof storedJitter === "number" && Number.isFinite(storedJitter)
-      ? storedJitter
-      : (migrated?.jitter ?? DEFAULT_CHECKPOINT.jitter);
-
-  return { setting: normalizeCheckpoint({ length, jitter }, deckSize), legacy };
 }
 
 /**
@@ -262,6 +268,7 @@ type LearnSessionProps = {
   deckName: string;
   questions: StudyQuestion[];
   profileId: string;
+  checkpointSetting: CheckpointSetting;
   starredIds: string[];
   /** The caller picked these questions by id, so already-mastered ones belong in the pool. */
   focusedReview?: boolean;
@@ -312,6 +319,7 @@ function LearnSessionView({
   deckName,
   questions,
   profileId,
+  checkpointSetting,
   starredIds,
   focusedReview = false,
   isAdmin = false,
@@ -350,7 +358,9 @@ function LearnSessionView({
   const [starred, setStarred] = useState<Set<string>>(() => new Set(starredIds));
   /** Questions set aside or deleted this session. They leave the counts and the pool. */
   const [excluded, setExcluded] = useState<Set<string>>(() => new Set());
-  const [checkpoint, setCheckpoint] = useState<CheckpointSetting>(DEFAULT_CHECKPOINT);
+  const [checkpoint, setCheckpoint] = useState<CheckpointSetting>(() =>
+    normalizeCheckpoint(checkpointSetting, seedQuestions.length),
+  );
   const [state, setState] = useState<LearnState | null>(null);
 
   const [phase, setPhase] = useState<"answering" | "feedback" | "checkpoint" | "lap" | "done">("answering");
@@ -367,20 +377,39 @@ function LearnSessionView({
 
   // The opening pool is shuffled within tiers, so it has to be built after
   // mount or the server and the client would disagree on the first question.
+  // A checkpoint still sitting in localStorage is adopted here for the same
+  // reason: reading it during render would disagree with the server HTML.
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    const saved = readStoredCheckpoint(profileId, seedQuestions.length);
-    // Rewriting a legacy { min, max } without also storing its spread would
-    // forget the variation those two numbers used to express.
-    if (saved.legacy) {
-      writeStoredLength(saved.setting.length);
-      writeStoredJitter(profileId, saved.setting.jitter);
+
+    let carried: CheckpointSetting | null = null;
+    try {
+      carried = readLegacyCheckpoint(profileId, checkpointSetting);
+    } catch {
+      // localStorage throws in private mode. The profile setting still seeds the session.
+      carried = null;
     }
-    setCheckpoint(saved.setting);
-    setState(createLearnState(seedQuestions, saved.setting));
+
+    // This deck clamps the live session. The value persisted below does not,
+    // or the first small deck someone opens would shrink a length they chose
+    // for a large one.
+    const setting = normalizeCheckpoint(carried ?? checkpointSetting, seedQuestions.length);
+    setCheckpoint(setting);
+    setState(createLearnState(seedQuestions, setting));
     setReady(true);
-  }, [seedQuestions, profileId]);
+
+    if (!carried) return;
+    const adopted = carried;
+    startTransition(async () => {
+      try {
+        await saveCheckpointSetting(adopted);
+        forgetLegacyCheckpoint(profileId);
+      } catch {
+        // Leave the keys so the next visit can try again.
+      }
+    });
+  }, [seedQuestions, profileId, checkpointSetting]);
 
   /**
    * The queue is created on demand rather than in a mount effect.
@@ -492,12 +521,17 @@ function LearnSessionView({
   const updateLength = useCallback(
     (length: number) => {
       const next = normalizeCheckpoint({ length, jitter: checkpoint.jitter }, questions.length);
+      // The slider reads this state. The action only persists it.
       setCheckpoint(next);
       setState((previous) => (previous ? withCheckpoint(previous, next) : previous));
-      writeStoredLength(next.length);
-      // The length key no longer carries the spread, so the profile jitter
-      // key has to hold whatever this session is actually using.
-      writeStoredJitter(profileId, next.jitter);
+      startTransition(async () => {
+        try {
+          await saveCheckpointSetting(next);
+          forgetLegacyCheckpoint(profileId);
+        } catch {
+          // The slider already moved. A failed write leaves the choice for this session.
+        }
+      });
     },
     [checkpoint.jitter, questions.length, profileId],
   );

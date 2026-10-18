@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { ButtonLink, EmptyState, PageHeader } from "@/components/ui";
 import { getSession } from "@/lib/auth";
-import { getDeck, getStudyQuestions, listDeckQuestions } from "@/lib/data";
+import { getCheckpointSetting, getDeck, getStudyQuestions, listDeckQuestions } from "@/lib/data";
 import type { StudyQuestion } from "@/lib/types";
 
 import { LearnSession } from "./LearnSession";
@@ -28,9 +28,10 @@ export default async function LearnPage({ params, searchParams }: PageProps<"/de
   const deck = await getDeck(deckId);
   if (!deck) notFound();
 
-  const [questions, summaries] = await Promise.all([
+  const [questions, summaries, checkpointSetting] = await Promise.all([
     getStudyQuestions(deckId, session.profileId),
     listDeckQuestions(deckId, session.profileId),
+    getCheckpointSetting(session.profileId),
   ]);
   const starredIds = summaries.filter((summary) => summary.starred).map((summary) => summary.id);
 
@@ -76,6 +77,7 @@ export default async function LearnPage({ params, searchParams }: PageProps<"/de
       deckName={deck.name}
       questions={filtered}
       profileId={session.profileId}
+      checkpointSetting={checkpointSetting}
       starredIds={starredIds}
       focusedReview={Boolean(ids)}
       isAdmin={session.role === "admin"}

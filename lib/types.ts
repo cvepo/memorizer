@@ -4,6 +4,11 @@ export type Profile = {
   created_at: string;
 };
 
+export type ProfileSettings = {
+  checkpointLength: number;
+  checkpointJitter: number;
+};
+
 export type Course = {
   id: string;
   name: string;
@@ -198,6 +203,10 @@ export type Database = {
   public: {
     Tables: {
       profiles: Row<Profile>;
+      profile_settings: Row<
+        { profile_id: string; checkpoint_length: number; checkpoint_jitter: number; updated_at: string },
+        [BelongsTo<"profile_settings_profile_id_fkey", "profile_id", "profiles">]
+      >;
       courses: Row<Course>;
       decks: Row<Deck, [BelongsTo<"decks_course_id_fkey", "course_id", "courses">]>;
       questions: Row<Question, [BelongsTo<"questions_deck_id_fkey", "deck_id", "decks">]>;
