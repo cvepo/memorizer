@@ -131,8 +131,13 @@ type RawStudyQuestion = Omit<StudyQuestion, "choices" | "progress"> & {
 };
 
 /** Questions for a deck with their imported choices and this profile's progress. */
-export async function getStudyQuestions(deckId: string, profileId: string): Promise<StudyQuestion[]> {
-  const { data, error } = await supabase()
+export async function getStudyQuestions(
+  deckId: string,
+  profileId: string,
+  opts?: { includeIgnored?: boolean },
+): Promise<StudyQuestion[]> {
+  const db = supabase();
+  const { data, error } = await db
     .from("questions")
     .select(
       `*,
@@ -146,13 +151,20 @@ export async function getStudyQuestions(deckId: string, profileId: string): Prom
 
   if (error) throw new Error(error.message);
 
-  return ((data ?? []) as unknown as RawStudyQuestion[]).map(
-    ({ answer_choices, question_progress, ...question }) => ({
+  const ignored = opts?.includeIgnored === true
+    ? []
+    : unwrap(
+        await db.from("ignored_questions").select("question_id").eq("profile_id", profileId),
+      ) ?? [];
+  const ignoredIds = new Set(ignored.map((row) => row.question_id));
+
+  return ((data ?? []) as unknown as RawStudyQuestion[])
+    .filter((question) => !ignoredIds.has(question.id))
+    .map(({ answer_choices, question_progress, ...question }) => ({
       ...question,
       choices: answer_choices ?? [],
       progress: question_progress?.[0] ?? null,
-    }),
-  );
+    }));
 }
 
 export async function getDeckTopics(deckId: string): Promise<string[]> {
@@ -283,6 +295,7 @@ type RawSummary = {
   position: number;
   question_progress: { times_incorrect: number; mastery_count: number; times_seen: number }[] | null;
   starred_questions: { question_id: string }[] | null;
+  ignored_questions: { question_id: string }[] | null;
 };
 
 const toSummary = (row: RawSummary): QuestionSummary => ({
@@ -296,13 +309,15 @@ const toSummary = (row: RawSummary): QuestionSummary => ({
   mastery_count: row.question_progress?.[0]?.mastery_count ?? 0,
   times_seen: row.question_progress?.[0]?.times_seen ?? 0,
   starred: (row.starred_questions?.length ?? 0) > 0,
+  ignored: (row.ignored_questions?.length ?? 0) > 0,
 });
 
 const SUMMARY_SELECT = `id, deck_id, question_text, correct_answer, topic, position,
    question_progress(times_incorrect, mastery_count, times_seen),
-   starred_questions(question_id)`;
+   starred_questions(question_id),
+   ignored_questions(question_id)`;
 
-/** Every question in a deck with this profile's progress and star state. */
+/** Every question in a deck with this profile's progress, star and ignore state. */
 export async function listDeckQuestions(deckId: string, profileId: string): Promise<QuestionSummary[]> {
   const { data, error } = await supabase()
     .from("questions")
@@ -310,6 +325,7 @@ export async function listDeckQuestions(deckId: string, profileId: string): Prom
     .eq("deck_id", deckId)
     .eq("question_progress.profile_id", profileId)
     .eq("starred_questions.profile_id", profileId)
+    .eq("ignored_questions.profile_id", profileId)
     .order("position")
     .order("created_at");
   if (error) throw new Error(error.message);
@@ -327,6 +343,7 @@ export async function listStarredEverywhere(
        question:questions(${SUMMARY_SELECT}, deck:decks(*, course:courses(*)))`,
     )
     .eq("profile_id", profileId)
+    .eq("question.ignored_questions.profile_id", profileId)
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
 

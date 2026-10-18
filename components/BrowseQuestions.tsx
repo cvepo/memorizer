@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 
+import { QuestionActions } from "@/components/QuestionActions";
 import { Badge, Button, Card, EmptyState, Input, cn } from "@/components/ui";
 import { StarButton } from "@/components/StarButton";
 import { MASTERY_LABELS, type MasteryLevel } from "@/lib/learnAlgorithm";
@@ -10,7 +11,7 @@ import type { QuestionSummary } from "@/lib/types";
 
 const PAGE_SIZE = 25;
 
-type FilterValue = "all" | "needsReview" | "starred";
+type FilterValue = "all" | "needsReview" | "starred" | "ignored";
 
 function masteryLabel(masteryCount: number) {
   const level = Math.max(0, Math.min(3, masteryCount)) as MasteryLevel;
@@ -28,33 +29,51 @@ function isNeedsReview(question: QuestionSummary) {
  * fetches nothing, owns only local UI state, and renders 25 rows at a time so
  * a 200+ question deck never mounts every row at once.
  */
-export function BrowseQuestions({ questions, deckId }: { questions: QuestionSummary[]; deckId: string }) {
+export function BrowseQuestions({
+  questions,
+  deckId,
+  isAdmin,
+}: {
+  questions: QuestionSummary[];
+  deckId: string;
+  isAdmin: boolean;
+}) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterValue>("all");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [ignoredById, setIgnoredById] = useState<Map<string, boolean>>(() => new Map());
+  const [deleted, setDeleted] = useState<Set<string>>(() => new Set());
+
+  const rows = useMemo(
+    () => questions.filter((question) => !deleted.has(question.id)),
+    [questions, deleted],
+  );
 
   const counts = useMemo(
     () => ({
-      all: questions.length,
-      needsReview: questions.filter(isNeedsReview).length,
-      starred: questions.filter((question) => question.starred).length,
+      all: rows.length,
+      needsReview: rows.filter(isNeedsReview).length,
+      starred: rows.filter((question) => question.starred).length,
+      ignored: rows.filter((question) => ignoredById.get(question.id) ?? question.ignored).length,
     }),
-    [questions],
+    [rows, ignoredById],
   );
 
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
-    return questions.filter((question) => {
+    return rows.filter((question) => {
+      const ignored = ignoredById.get(question.id) ?? question.ignored;
       if (filter === "needsReview" && !isNeedsReview(question)) return false;
       if (filter === "starred" && !question.starred) return false;
+      if (filter === "ignored" && !ignored) return false;
       if (!term) return true;
       return (
         question.question_text.toLowerCase().includes(term) ||
         question.correct_answer.toLowerCase().includes(term)
       );
     });
-  }, [questions, filter, query]);
+  }, [rows, filter, query, ignoredById]);
 
   const visible = filtered.slice(0, visibleCount);
 
@@ -81,6 +100,7 @@ export function BrowseQuestions({ questions, deckId }: { questions: QuestionSumm
     { value: "all", label: "All", count: counts.all },
     { value: "needsReview", label: "Needs review", count: counts.needsReview },
     { value: "starred", label: "Starred", count: counts.starred },
+    { value: "ignored", label: "Hidden", count: counts.ignored },
   ];
 
   return (
@@ -128,21 +148,49 @@ export function BrowseQuestions({ questions, deckId }: { questions: QuestionSumm
           <div className="space-y-2">
             {visible.map((question) => {
               const isExpanded = expanded.has(question.id);
+              const ignored = ignoredById.get(question.id) ?? question.ignored;
               return (
                 <Card key={question.id} className="p-4">
                   <div className="flex items-start justify-between gap-3">
-                    <p className="line-clamp-2 min-w-0 flex-1 text-sm font-medium text-ink">
+                    <p
+                      className={cn(
+                        "line-clamp-2 min-w-0 flex-1 text-sm font-medium",
+                        ignored ? "text-muted" : "text-ink",
+                      )}
+                    >
                       {question.question_text}
                     </p>
-                    <StarButton
-                      questionId={question.id}
-                      starred={question.starred}
-                      size="sm"
-                      className="shrink-0"
-                    />
+                    <div className="flex shrink-0 items-start gap-1">
+                      <StarButton questionId={question.id} starred={question.starred} size="sm" />
+                      <QuestionActions
+                        questionId={question.id}
+                        deckId={deckId}
+                        ignored={ignored}
+                        isAdmin={isAdmin}
+                        questionText={question.question_text}
+                        correctAnswer={question.correct_answer}
+                        topic={question.topic}
+                        size="sm"
+                        onIgnoredChange={(next) =>
+                          setIgnoredById((current) => {
+                            const copy = new Map(current);
+                            copy.set(question.id, next);
+                            return copy;
+                          })
+                        }
+                        onDeleted={() =>
+                          setDeleted((current) => {
+                            const copy = new Set(current);
+                            copy.add(question.id);
+                            return copy;
+                          })
+                        }
+                      />
+                    </div>
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+                    {ignored ? <Badge tone="accent">Hidden</Badge> : null}
                     {isNeedsReview(question) ? (
                       <span className="text-danger">Missed {question.times_incorrect} times</span>
                     ) : null}

@@ -35,7 +35,7 @@ export default async function DeckEditPage({ params }: PageProps<"/decks/[deckId
   if (!deck) notFound();
 
   const [questions, topics] = await Promise.all([
-    getStudyQuestions(deckId, session.profileId),
+    getStudyQuestions(deckId, session.profileId, { includeIgnored: true }),
     getDeckTopics(deckId),
   ]);
 

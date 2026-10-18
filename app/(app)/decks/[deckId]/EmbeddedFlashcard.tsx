@@ -1,5 +1,6 @@
 "use client";
 
+import { QuestionActions } from "@/components/QuestionActions";
 import { StarButton } from "@/components/StarButton";
 import { cn } from "@/components/ui";
 import { OPTION_LABELS } from "@/components/MCQOption";
@@ -21,6 +22,10 @@ export function EmbeddedFlashcard({
   total,
   choices,
   onStarChange,
+  isAdmin,
+  ignored,
+  onIgnoredChange,
+  onDeleted,
 }: {
   question: StudyQuestion;
   revealed: boolean;
@@ -33,6 +38,10 @@ export function EmbeddedFlashcard({
    *  what Learn and Quiz are for, so these are not interactive here. */
   choices: Choice[] | null;
   onStarChange?: (starred: boolean) => void;
+  isAdmin: boolean;
+  ignored: boolean;
+  onIgnoredChange?: (ignored: boolean) => void;
+  onDeleted?: () => void;
 }) {
   return (
     <div className="relative">
@@ -114,16 +123,29 @@ export function EmbeddedFlashcard({
       </button>
 
       {/* Outside the reveal button: a button may not nest inside a button, and
-          starring must never flip the card. */}
-      <div className="absolute top-3 right-3">
-        {/* StarButton seeds its state from the prop, so it has to remount when
-            the card changes or it would show the previous question's star. */}
+          starring or the question menu must never flip the card. */}
+      <div className="absolute top-3 right-3 z-10 flex items-start gap-1">
+        {/* These seed their state from props, so they have to remount when the
+            card changes or they would keep the previous question's star and menu. */}
         <StarButton
           key={question.id}
           questionId={question.id}
           starred={starred}
           size="sm"
           onChange={onStarChange}
+        />
+        <QuestionActions
+          key={`${question.id}:actions`}
+          questionId={question.id}
+          deckId={question.deck_id}
+          ignored={ignored}
+          isAdmin={isAdmin}
+          questionText={question.question_text}
+          correctAnswer={question.correct_answer}
+          topic={question.topic}
+          size="sm"
+          onIgnoredChange={onIgnoredChange}
+          onDeleted={onDeleted}
         />
       </div>
     </div>

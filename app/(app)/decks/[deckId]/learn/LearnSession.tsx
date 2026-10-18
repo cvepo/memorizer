@@ -8,6 +8,7 @@ import { MCQOption, OPTION_LABELS, type OptionState } from "@/components/MCQOpti
 import { Mascot, type MascotState } from "@/components/Mascot";
 import { RangeSlider } from "@/components/RangeSlider";
 import { SaveStatus } from "@/components/SaveStatus";
+import { QuestionActions } from "@/components/QuestionActions";
 import { StarButton } from "@/components/StarButton";
 import { BadgeCelebration } from "@/components/BadgeCelebration";
 import { Button, ButtonLink, Card, ProgressBar, Stat, cn } from "@/components/ui";
@@ -20,6 +21,7 @@ import {
   CHECKPOINT_LIMITS,
   DEFAULT_CHECKPOINT_RANGE,
   MASTERY_MASTERED,
+  POOL_SIZE,
   applyAnswer,
   countsFor,
   createLearnState,
@@ -59,6 +61,43 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
 }
 
+function isQuestionMenu(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest("[data-question-actions]") !== null;
+}
+
+/**
+ * Take a question out of the live pool without grading it.
+ * Session tallies and stored mastery stay as they were — ignore is not an answer.
+ */
+function removeFromLearnPool(state: LearnState, questionId: string): LearnState {
+  let backlog = state.backlog.filter((id) => id !== questionId);
+  let pool = state.pool.filter((id) => id !== questionId);
+  while (pool.length < POOL_SIZE && backlog.length > 0) {
+    const next = backlog[0];
+    if (!next) break;
+    backlog = backlog.slice(1);
+    pool = [...pool, next];
+  }
+
+  const states = { ...state.states };
+  delete states[questionId];
+
+  const current =
+    state.current !== questionId && state.current !== null && pool.includes(state.current)
+      ? state.current
+      : (pool[0] ?? null);
+
+  return {
+    ...state,
+    states,
+    pool,
+    backlog,
+    current,
+    missed: state.missed.filter((id) => id !== questionId),
+    masteredThisSession: state.masteredThisSession.filter((id) => id !== questionId),
+  };
+}
+
 function readStoredRange(): CheckpointRange | null {
   try {
     const raw = localStorage.getItem(RANGE_STORAGE_KEY);
@@ -93,6 +132,8 @@ type LearnSessionProps = {
   starredIds: string[];
   /** The caller picked these questions by id, so already-mastered ones belong in the pool. */
   focusedReview?: boolean;
+  /** Fix and delete stay hidden unless the caller knows this session is an admin. */
+  isAdmin?: boolean;
 };
 
 /**
@@ -140,6 +181,7 @@ function LearnSessionView({
   profileId,
   starredIds,
   focusedReview = false,
+  isAdmin = false,
   onBadges,
 }: LearnSessionProps & { onBadges: (badges: EarnedBadge[]) => void }) {
   const byId = useMemo(() => new Map(questions.map((q) => [q.id, q])), [questions]);
@@ -173,6 +215,8 @@ function LearnSessionView({
   const startedRef = useRef(false);
   const queueRef = useRef<AnswerQueue | null>(null);
   const [starred, setStarred] = useState<Set<string>>(() => new Set(starredIds));
+  /** Questions set aside or deleted this session. They leave the counts and the pool. */
+  const [excluded, setExcluded] = useState<Set<string>>(() => new Set());
   const [range, setRange] = useState<CheckpointRange>(DEFAULT_CHECKPOINT_RANGE);
   const [state, setState] = useState<LearnState | null>(null);
 
@@ -241,6 +285,20 @@ function LearnSessionView({
   const saveStatus = useSyncExternalStore(subscribeSave, readSaveStatus, () => IDLE_SAVE);
   const retrySave = useCallback(() => getQueue().retry(), [getQueue]);
 
+  const dropQuestion = useCallback((questionId: string) => {
+    setExcluded((current) => {
+      if (current.has(questionId)) return current;
+      const next = new Set(current);
+      next.add(questionId);
+      return next;
+    });
+    setState((previous) => (previous ? removeFromLearnPool(previous, questionId) : previous));
+    setPhase("answering");
+    setSelected(null);
+    setWasCorrect(null);
+    setPresentation((n) => n + 1);
+  }, []);
+
   const toggleStar = useCallback((questionId: string, next: boolean) => {
     setStarred((previous) => {
       const updated = new Set(previous);
@@ -251,7 +309,22 @@ function LearnSessionView({
   }, []);
 
   const currentId = state?.current ?? null;
-  const question = currentId ? byId.get(currentId) ?? null : null;
+  // A revalidation can drop an ignored question from the server list before this
+  // session has moved on. Pull it out of the pool here so the next paint is the
+  // following question, and so the removal never grades an answer.
+  if (currentId && state && !byId.has(currentId)) {
+    setExcluded((current) => {
+      if (current.has(currentId)) return current;
+      const next = new Set(current);
+      next.add(currentId);
+      return next;
+    });
+    setState(removeFromLearnPool(state, currentId));
+    setPhase("answering");
+    setSelected(null);
+    setWasCorrect(null);
+  }
+  const question = currentId && byId.has(currentId) ? (byId.get(currentId) ?? null) : null;
   const presentationKey = `${presentation}:${currentId ?? ""}`;
 
   useEffect(() => {
@@ -266,13 +339,12 @@ function LearnSessionView({
 
   const choices = presented && presented.key === presentationKey ? presented.choices : null;
 
-  const counts = useMemo(
-    () =>
-      state
-        ? countsFor(state, questions)
-        : { new: questions.length, learning: 0, familiar: 0, mastered: 0, total: questions.length },
-    [state, questions],
-  );
+  const counts = useMemo(() => {
+    const visible = questions.filter((question) => !excluded.has(question.id));
+    return state
+      ? countsFor(state, visible)
+      : { new: visible.length, learning: 0, familiar: 0, mastered: 0, total: visible.length };
+  }, [state, questions, excluded]);
 
   const available = useMemo(
     () => (question ? maxAvailableChoices(question, questions) : 4),
@@ -336,7 +408,9 @@ function LearnSessionView({
     startTransition(async () => {
       try {
         await resetDeckProgress(deckId);
-        const fresh = questions.map((q) => ({ ...q, progress: null }));
+        const fresh = questions
+          .filter((q) => !excluded.has(q.id))
+          .map((q) => ({ ...q, progress: null }));
         setState(createLearnState(fresh, range));
         setCheckpointCounts(null);
         setPhase("answering");
@@ -350,16 +424,17 @@ function LearnSessionView({
         setResetting(false);
       }
     });
-  }, [deckId, questions, range]);
+  }, [deckId, questions, excluded, range]);
 
   const restart = useCallback(() => {
-    setState(createLearnState(seedQuestions, range));
+    const pool = seedQuestions.filter((question) => !excluded.has(question.id));
+    setState(createLearnState(pool, range));
     setPhase("answering");
     setSelected(null);
     setWasCorrect(null);
     setCheckpointCounts(null);
     setPresentation((n) => n + 1);
-  }, [seedQuestions, range]);
+  }, [seedQuestions, excluded, range]);
 
   // A correct answer with nothing to read moves on by itself. Misses wait.
   useEffect(() => {
@@ -371,7 +446,7 @@ function LearnSessionView({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (isTypingTarget(event.target)) return;
+      if (isTypingTarget(event.target) || isQuestionMenu(event.target)) return;
 
       // Enter, Space or the right arrow all move on. The arrow matters most
       // after a miss, where the feedback panel is worth reading first and
@@ -719,13 +794,30 @@ function LearnSessionView({
               </p>
             ) : null}
           </div>
-          <StarButton
-            key={question.id}
-            questionId={question.id}
-            starred={starred.has(question.id)}
-            size="sm"
-            onChange={(next) => toggleStar(question.id, next)}
-          />
+          <div className="flex shrink-0 items-start gap-1">
+            <StarButton
+              key={question.id}
+              questionId={question.id}
+              starred={starred.has(question.id)}
+              size="sm"
+              onChange={(next) => toggleStar(question.id, next)}
+            />
+            <QuestionActions
+              key={`${question.id}:actions`}
+              questionId={question.id}
+              deckId={deckId}
+              ignored={false}
+              isAdmin={isAdmin}
+              questionText={question.question_text}
+              correctAnswer={question.correct_answer}
+              topic={question.topic}
+              size="sm"
+              onIgnoredChange={(next) => {
+                if (next) dropQuestion(question.id);
+              }}
+              onDeleted={() => dropQuestion(question.id)}
+            />
+          </div>
         </div>
 
         <div className="space-y-3">

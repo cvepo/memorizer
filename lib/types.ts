@@ -112,6 +112,7 @@ export type QuestionSummary = {
   mastery_count: number;
   times_seen: number;
   starred: boolean;
+  ignored: boolean;
 };
 
 export type DeckStats = {
@@ -221,6 +222,13 @@ export type Database = {
         [
           BelongsTo<"starred_questions_profile_id_fkey", "profile_id", "profiles">,
           BelongsTo<"starred_questions_question_id_fkey", "question_id", "questions">,
+        ]
+      >;
+      ignored_questions: Row<
+        { profile_id: string; question_id: string; created_at: string },
+        [
+          BelongsTo<"ignored_questions_profile_id_fkey", "profile_id", "profiles">,
+          BelongsTo<"ignored_questions_question_id_fkey", "question_id", "questions">,
         ]
       >;
       study_activity: Row<

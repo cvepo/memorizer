@@ -10,7 +10,7 @@ import { touchStudyActivity } from "@/lib/actions/activity";
 import { shuffle } from "@/lib/distractors";
 import type { StudyQuestion } from "@/lib/types";
 
-type Filter = "all" | "review" | "starred";
+type Filter = "all" | "review" | "starred" | "ignored";
 
 /** One study-activity ping covers a burst of cards; without it every keypress
  *  would be a request. */
@@ -40,31 +40,48 @@ function isEditable(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
+function isQuestionMenu(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest("[data-question-actions]") !== null;
+}
+
 export function DeckStudy({
   deckId,
   deckName,
   questions,
   starredIds,
   needsReviewIds,
+  ignoredIds,
   profileId,
+  isAdmin,
 }: {
   deckId: string;
   deckName: string;
   questions: StudyQuestion[];
   starredIds: string[];
   needsReviewIds: string[];
+  ignoredIds: string[];
   profileId: string;
+  isAdmin: boolean;
 }) {
   const searchParams = useSearchParams();
   const requestedId = searchParams.get("q");
 
+  const [removedIds, setRemovedIds] = useState<Set<string>>(() => new Set());
   const byId = useMemo(() => new Map(questions.map((q) => [q.id, q])), [questions]);
-  const deckOrder = useMemo(() => questions.map((q) => q.id), [questions]);
+  const deckOrder = useMemo(
+    () => questions.map((q) => q.id).filter((id) => !removedIds.has(id)),
+    [questions, removedIds],
+  );
   const reviewSet = useMemo(() => new Set(needsReviewIds), [needsReviewIds]);
 
   const [starred, setStarred] = useState<Set<string>>(() => new Set(starredIds));
+  const [ignored, setIgnored] = useState<Set<string>>(() => new Set(ignoredIds));
   const [filter, setFilter] = useState<Filter>("all");
-  const [order, setOrder] = useState<string[]>(deckOrder);
+  // Ignored questions stay out of the pass you are studying. The Ignored filter
+  // is the only place they are dealt.
+  const [order, setOrder] = useState<string[]>(() =>
+    questions.map((q) => q.id).filter((id) => !ignoredIds.includes(id)),
+  );
   const [index, setIndex] = useState(0);
   /** Options for the card on screen. Generated once per card and kept in state:
    *  generateChoices shuffles, so running it during render would reorder the
@@ -77,9 +94,18 @@ export function DeckStudy({
   const swipeStart = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
 
+  const activeIds = useMemo(
+    () => deckOrder.filter((id) => !ignored.has(id)),
+    [deckOrder, ignored],
+  );
+  const ignoredCount = deckOrder.length - activeIds.length;
   const starredCount = useMemo(
-    () => deckOrder.reduce((n, id) => (starred.has(id) ? n + 1 : n), 0),
-    [deckOrder, starred],
+    () => activeIds.reduce((n, id) => (starred.has(id) ? n + 1 : n), 0),
+    [activeIds, starred],
+  );
+  const reviewCount = useMemo(
+    () => activeIds.reduce((n, id) => (reviewSet.has(id) ? n + 1 : n), 0),
+    [activeIds, reviewSet],
   );
 
   const markStudied = useCallback(() => {
@@ -95,12 +121,24 @@ export function DeckStudy({
     if (restored.current) return;
     restored.current = true;
 
-    const deepLinked = requestedId ? deckOrder.indexOf(requestedId) : -1;
+    const active = deckOrder.filter((id) => !ignored.has(id));
+    if (requestedId && ignored.has(requestedId)) {
+      const ids = deckOrder.filter((id) => ignored.has(id));
+      const at = ids.indexOf(requestedId);
+      if (at >= 0) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- `?q` is client-only; reading it during render would mismatch the server HTML.
+        setFilter("ignored");
+        setOrder(ids);
+        setIndex(at);
+        return;
+      }
+    }
+
+    const deepLinked = requestedId ? active.indexOf(requestedId) : -1;
     const target = deepLinked >= 0 ? deepLinked : (readStoredPosition(profileId, deckId) ?? 0);
-    if (target <= 0 || target >= deckOrder.length) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the stored position and `?q` are client-only; reading them during render would mismatch the server HTML.
+    if (target <= 0 || target >= active.length) return;
     setIndex(target);
-  }, [deckId, deckOrder, profileId, requestedId]);
+  }, [deckId, deckOrder, ignored, profileId, requestedId]);
 
   // Only the unfiltered sequence is worth remembering; a filtered index would
   // point at a different card next visit.
@@ -132,11 +170,12 @@ export function DeckStudy({
 
   const idsFor = useCallback(
     (value: Filter) => {
-      if (value === "review") return deckOrder.filter((id) => reviewSet.has(id));
-      if (value === "starred") return deckOrder.filter((id) => starred.has(id));
-      return deckOrder;
+      if (value === "review") return activeIds.filter((id) => reviewSet.has(id));
+      if (value === "starred") return activeIds.filter((id) => starred.has(id));
+      if (value === "ignored") return deckOrder.filter((id) => ignored.has(id));
+      return activeIds;
     },
-    [deckOrder, reviewSet, starred],
+    [activeIds, deckOrder, ignored, reviewSet, starred],
   );
 
   const applyFilter = useCallback(
@@ -165,7 +204,7 @@ export function DeckStudy({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (isEditable(event.target)) return;
+      if (isEditable(event.target) || isQuestionMenu(event.target)) return;
       const tag = event.target instanceof HTMLElement ? event.target.tagName : "";
 
       if (event.key === " " || event.key === "Enter") {
@@ -233,10 +272,20 @@ export function DeckStudy({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- generateChoices shuffles; doing this during render would break hydration.
     setCardChoices({ id: current.id, choices: generateChoices(current, questions) });
   }, [current, questions]);
-  if (!current) return null;
 
-  const atEnd = index >= order.length - 1;
-  const reviewCount = reviewSet.size;
+  // Drop the card that just left this view and stay on the one that slides into
+  // its place. Ignoring never reveals, grades, or touches mastery.
+  function releaseQuestion(questionId: string) {
+    const at = order.indexOf(questionId);
+    if (at < 0) return;
+    const nextLength = order.length - 1;
+    const shown = Math.min(index, Math.max(order.length - 1, 0));
+    setOrder(order.filter((id) => id !== questionId));
+    setIndex(nextLength === 0 ? 0 : Math.min(shown, nextLength - 1));
+    setRevealed(false);
+  }
+
+  const atEnd = order.length > 0 && index >= order.length - 1;
 
   const shortcut = (value: Exclude<Filter, "all">, label: string, count: number, why: string) => {
     const active = filter === value;
@@ -263,56 +312,95 @@ export function DeckStudy({
 
   return (
     <section aria-label={`${deckName} flashcards`} className="space-y-4">
-      <div onPointerDown={onPointerDown} onPointerUp={onPointerUp} className="touch-pan-y">
-        <EmbeddedFlashcard
-          question={current}
-          choices={cardChoices?.id === current.id ? cardChoices.choices : null}
-          revealed={revealed}
-          onToggle={onToggle}
-          starred={starred.has(current.id)}
-          index={index}
-          total={order.length}
-          onStarChange={(value) =>
-            setStarred((previousSet) => {
-              const copy = new Set(previousSet);
-              if (value) copy.add(current.id);
-              else copy.delete(current.id);
-              return copy;
-            })
-          }
-        />
-      </div>
+      {current ? (
+        <>
+          <div onPointerDown={onPointerDown} onPointerUp={onPointerUp} className="touch-pan-y">
+            <EmbeddedFlashcard
+              question={current}
+              choices={cardChoices?.id === current.id ? cardChoices.choices : null}
+              revealed={revealed}
+              onToggle={onToggle}
+              starred={starred.has(current.id)}
+              index={index}
+              total={order.length}
+              isAdmin={isAdmin}
+              ignored={ignored.has(current.id)}
+              onStarChange={(value) =>
+                setStarred((previousSet) => {
+                  const copy = new Set(previousSet);
+                  if (value) copy.add(current.id);
+                  else copy.delete(current.id);
+                  return copy;
+                })
+              }
+              onIgnoredChange={(next) => {
+                setIgnored((previous) => {
+                  const copy = new Set(previous);
+                  if (next) copy.add(current.id);
+                  else copy.delete(current.id);
+                  return copy;
+                });
+                const leaves = filter === "ignored" ? !next : next;
+                if (leaves) releaseQuestion(current.id);
+              }}
+              onDeleted={() => {
+                setRemovedIds((previous) => {
+                  const copy = new Set(previous);
+                  copy.add(current.id);
+                  return copy;
+                });
+                setIgnored((previous) => {
+                  if (!previous.has(current.id)) return previous;
+                  const copy = new Set(previous);
+                  copy.delete(current.id);
+                  return copy;
+                });
+                releaseQuestion(current.id);
+              }}
+            />
+          </div>
 
-      <div className="flex items-center justify-between gap-2">
-        <Button variant="secondary" onClick={previous} disabled={index === 0}>
-          Previous
-        </Button>
-        <p className="text-sm tabular-nums text-muted" aria-live="polite">
-          {index + 1} of {order.length}
-        </p>
-        <Button variant="secondary" onClick={next} disabled={atEnd}>
-          Next
-        </Button>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="ghost" size="sm" onClick={reveal}>
-          {revealed ? "Show question" : "Show answer"}
-        </Button>
-        <Button variant="ghost" size="sm" onClick={reshuffle}>
-          Shuffle
-        </Button>
-        {atEnd ? (
-          <>
-            <Button variant="ghost" size="sm" onClick={restart}>
-              Restart
+          <div className="flex items-center justify-between gap-2">
+            <Button variant="secondary" onClick={previous} disabled={index === 0}>
+              Previous
             </Button>
-            <ButtonLink href={`/decks/${deckId}/learn`} variant="ghost" size="sm">
-              Start Learn
-            </ButtonLink>
-          </>
-        ) : null}
-      </div>
+            <p className="text-sm tabular-nums text-muted" aria-live="polite">
+              {index + 1} of {order.length}
+            </p>
+            <Button variant="secondary" onClick={next} disabled={atEnd}>
+              Next
+            </Button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={reveal}>
+              {revealed ? "Show question" : "Show answer"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={reshuffle}>
+              Shuffle
+            </Button>
+            {atEnd ? (
+              <>
+                <Button variant="ghost" size="sm" onClick={restart}>
+                  Restart
+                </Button>
+                <ButtonLink href={`/decks/${deckId}/learn`} variant="ghost" size="sm">
+                  Start Learn
+                </ButtonLink>
+              </>
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <Card className="space-y-2">
+          <p className="text-sm font-medium">No cards in this view</p>
+          <p className="text-sm text-muted">
+            {ignoredCount > 0
+              ? "Hidden questions are set aside until you open them from the filter below."
+              : "Nothing is left in this pass."}
+          </p>
+        </Card>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         {shortcut(
@@ -322,14 +410,20 @@ export function DeckStudy({
           "Nothing needs review yet — Learn and Quiz flag questions you miss twice.",
         )}
         {shortcut("starred", "Starred", starredCount, "Star a question to collect it here.")}
+        {shortcut("ignored", "Hidden", ignoredCount, "Hide a question to set it aside here.")}
         {filter === "all" ? null : (
-          <Button variant="ghost" size="sm" onClick={() => applyFilter("all")}>
-            Show all {deckOrder.length}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => applyFilter("all")}
+            disabled={activeIds.length === 0}
+          >
+            Show all {activeIds.length}
           </Button>
         )}
       </div>
 
-      {atEnd ? (
+      {current && atEnd ? (
         <Card className="space-y-2">
           <p className="text-sm font-medium">
             That&rsquo;s all {order.length} {order.length === 1 ? "card" : "cards"}

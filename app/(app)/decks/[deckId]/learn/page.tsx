@@ -78,6 +78,7 @@ export default async function LearnPage({ params, searchParams }: PageProps<"/de
       profileId={session.profileId}
       starredIds={starredIds}
       focusedReview={Boolean(ids)}
+      isAdmin={session.role === "admin"}
     />
   );
 }

@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { DeckAdmin } from "@/app/(app)/decks/[deckId]/DeckAdmin";
 import { DeckStudy } from "@/app/(app)/decks/[deckId]/DeckStudy";
+import { BrowseQuestions } from "@/components/BrowseQuestions";
 import { ModeTabs } from "@/components/ModeTabs";
 import { ButtonLink, Card, EmptyState, ProgressBar } from "@/components/ui";
 import { getSession } from "@/lib/auth";
@@ -35,7 +36,8 @@ export default async function DeckPage({ params }: PageProps<"/decks/[deckId]">)
   if (!deck) notFound();
 
   const [questions, statsMap, topics, attempts, reviewCounts, summaries] = await Promise.all([
-    getStudyQuestions(deckId, session.profileId),
+    // Ignored questions stay available so flashcards can list them under Ignored.
+    getStudyQuestions(deckId, session.profileId, { includeIgnored: true }),
     deckStatsByDeck(session.profileId),
     topicStats(deckId, session.profileId),
     listQuizAttempts(deckId, session.profileId),
@@ -48,12 +50,16 @@ export default async function DeckPage({ params }: PageProps<"/decks/[deckId]">)
   const isAdmin = session.role === "admin";
   const showTopics = topics.length > 1 || (topics.length === 1 && topics[0].topic !== "Untagged");
 
-  const total = summaries.length;
-  const started = summaries.filter((q) => q.times_seen > 0).length;
-  const mastered = summaries.filter((q) => q.mastery_count >= 3).length;
+  // Ignored questions are still in the deck, but they are not part of mastery.
+  const activeSummaries = summaries.filter((question) => !question.ignored);
+  const ignoredCount = summaries.length - activeSummaries.length;
+  const total = activeSummaries.length;
+  const started = activeSummaries.filter((q) => q.times_seen > 0).length;
+  const mastered = activeSummaries.filter((q) => q.mastery_count >= 3).length;
   const counts = reviewCounts.get(deckId);
   const starredIds = summaries.filter((q) => q.starred).map((q) => q.id);
   const needsReviewIds = summaries.filter(needsReview).map((q) => q.id);
+  const ignoredIds = summaries.filter((q) => q.ignored).map((q) => q.id);
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
@@ -71,7 +77,8 @@ export default async function DeckPage({ params }: PageProps<"/decks/[deckId]">)
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{deck.name}</h1>
             <p className="mt-1 text-sm tabular-nums text-muted">
-              {questions.length} {questions.length === 1 ? "question" : "questions"}
+              {total} {total === 1 ? "question" : "questions"}
+              {ignoredCount > 0 ? ` · ${ignoredCount} hidden` : ""}
             </p>
             {deck.description ? (
               <p className="mt-1 max-w-prose text-sm text-muted">{deck.description}</p>
@@ -119,7 +126,9 @@ export default async function DeckPage({ params }: PageProps<"/decks/[deckId]">)
           questions={questions}
           starredIds={starredIds}
           needsReviewIds={needsReviewIds}
+          ignoredIds={ignoredIds}
           profileId={session.profileId}
+          isAdmin={isAdmin}
         />
       )}
 
@@ -156,7 +165,24 @@ export default async function DeckPage({ params }: PageProps<"/decks/[deckId]">)
             <span className="tabular-nums">{counts.starred}</span> starred
           </p>
         ) : null}
+
+        {ignoredCount > 0 ? (
+          <p className="text-sm text-muted">
+            <span className="tabular-nums">{ignoredCount}</span> hidden
+          </p>
+        ) : null}
       </Card>
+
+      {/* Search and filter the whole deck. Its rows are Cards already, so this
+          section is deliberately not wrapped in another one. */}
+      {summaries.length > 0 ? (
+        <section className="space-y-3" aria-labelledby="browse-questions">
+          <h2 id="browse-questions" className="font-medium">
+            Browse questions
+          </h2>
+          <BrowseQuestions questions={summaries} deckId={deck.id} isAdmin={isAdmin} />
+        </section>
+      ) : null}
 
       {showTopics ? (
         <Card className="space-y-4">
