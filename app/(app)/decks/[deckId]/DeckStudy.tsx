@@ -311,7 +311,9 @@ export function DeckStudy({
   };
 
   return (
-    <section aria-label={`${deckName} flashcards`} className="space-y-4">
+    // The card, the mover and the filters sit closer on a phone so Previous
+    // and Next stay on screen with a long question. Desktop keeps the old gap.
+    <section aria-label={`${deckName} flashcards`} className="space-y-2 sm:space-y-4">
       {current ? (
         <>
           <div onPointerDown={onPointerDown} onPointerUp={onPointerUp} className="touch-pan-y">

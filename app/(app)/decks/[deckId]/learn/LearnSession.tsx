@@ -735,44 +735,107 @@ function LearnSessionView({
         : "wrong";
 
   const level = state.states[question.id]?.mastery ?? 0;
+  const masteredPct =
+    counts.total > 0 ? Math.min(100, Math.round((counts.mastered / counts.total) * 100)) : 0;
 
   return (
-    <div className="space-y-6">
-      {breadcrumb}
+    // `gap` drops a `hidden` child, so the phone does not keep a margin for
+    // the breadcrumb row that is off screen.
+    <div className="flex flex-col gap-4 sm:gap-6">
+      <div className="hidden sm:block">{breadcrumb}</div>
 
       {focusedReview ? (
         <p className="text-sm text-muted">
-          Focused review — only these questions, including ones you have already mastered.
+          <span className="sm:hidden">Focused review, including mastered.</span>
+          <span className="hidden sm:inline">
+            Focused review — only these questions, including ones you have already mastered.
+          </span>
         </p>
       ) : null}
 
-      <div className="sticky top-14 z-10 -mx-4 space-y-2 border-b border-line bg-bg px-4 pb-3 pt-2 sm:-mx-6 sm:px-6">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          {/* The four-level breakdown is detail, not navigation: on a phone the
-              header keeps mastered/total and the streak instead. */}
-          <LevelCounts counts={counts} className="hidden sm:flex" />
-          <div className="ml-auto flex items-center gap-2">
+      <div className="sticky top-14 z-10 -mx-4 min-w-0 border-b border-line bg-bg sm:-mx-6">
+        {/* Back link, streak, tally and Exit share one line so a second row
+            does not push the question into a scroll. The bar sits in the
+            bottom padding, under the controls. */}
+        <div className="relative flex items-center gap-2 px-4 pt-1 pb-2 sm:hidden">
+          <Link
+            href={`/decks/${deckId}`}
+            aria-label={`Back to ${deckName}`}
+            className="flex min-w-0 flex-1 items-center self-stretch text-sm text-muted transition-colors hover:text-ink"
+          >
+            <span className="min-w-0 truncate">← {deckName}</span>
+          </Link>
+          <div className="flex shrink-0 items-center gap-1.5">
             <Mascot state={mascotState} size="sm" replayKey={state.answered} />
             <span
               className={cn(
-                "rounded-md border px-2 py-0.5 text-xs font-medium tabular-nums transition-colors",
+                "whitespace-nowrap rounded-md border px-2 py-0.5 text-xs font-medium tabular-nums transition-colors",
                 state.streak >= 3 ? "tint-accent text-ink" : "border-line text-muted",
               )}
-              aria-label={`Current streak: ${state.streak} correct in a row`}
+              aria-label={
+                state.bestStreak > state.streak
+                  ? `Current streak: ${state.streak} correct in a row, best ${state.bestStreak}`
+                  : `Current streak: ${state.streak} correct in a row`
+              }
             >
               Streak {state.streak}
-              {state.bestStreak > state.streak ? (
-                <span className="text-muted"> · best {state.bestStreak}</span>
-              ) : null}
             </span>
           </div>
+          <span className="shrink-0 text-xs tabular-nums text-muted" aria-hidden>
+            {counts.mastered}/{counts.total}
+          </span>
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-sunken"
+            role="progressbar"
+            aria-valuenow={counts.mastered}
+            aria-valuemin={0}
+            aria-valuemax={counts.total}
+            aria-label={`${counts.mastered} of ${counts.total} mastered`}
+          >
+            <div className="h-full bg-success" style={{ width: `${masteredPct}%` }} />
+          </div>
+          <ButtonLink href={`/decks/${deckId}`} variant="ghost" size="sm" className="shrink-0">
+            Exit
+          </ButtonLink>
         </div>
-        <ProgressBar value={counts.mastered} total={counts.total} />
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          <p className="text-sm tabular-nums text-muted">
-            {counts.mastered} / {counts.total} mastered
-          </p>
-          <SaveStatus status={saveStatus} onRetry={retrySave} />
+        {saveStatus.kind !== "idle" ? (
+          <div className="px-4 pb-1.5 sm:hidden">
+            <SaveStatus
+              status={saveStatus}
+              onRetry={retrySave}
+              className="max-w-full flex-wrap"
+            />
+          </div>
+        ) : null}
+
+        <div className="hidden space-y-2 px-4 pb-3 pt-2 sm:block sm:px-6">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            {/* The four-level breakdown is detail, not navigation: on a phone the
+                header keeps mastered/total and the streak instead. */}
+            <LevelCounts counts={counts} className="hidden sm:flex" />
+            <div className="ml-auto flex items-center gap-2">
+              <Mascot state={mascotState} size="sm" replayKey={state.answered} />
+              <span
+                className={cn(
+                  "rounded-md border px-2 py-0.5 text-xs font-medium tabular-nums transition-colors",
+                  state.streak >= 3 ? "tint-accent text-ink" : "border-line text-muted",
+                )}
+                aria-label={`Current streak: ${state.streak} correct in a row`}
+              >
+                Streak {state.streak}
+                {state.bestStreak > state.streak ? (
+                  <span className="text-muted"> · best {state.bestStreak}</span>
+                ) : null}
+              </span>
+            </div>
+          </div>
+          <ProgressBar value={counts.mastered} total={counts.total} />
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            <p className="text-sm tabular-nums text-muted">
+              {counts.mastered} / {counts.total} mastered
+            </p>
+            <SaveStatus status={saveStatus} onRetry={retrySave} />
+          </div>
         </div>
       </div>
 

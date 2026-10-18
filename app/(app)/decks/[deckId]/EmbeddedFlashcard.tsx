@@ -7,11 +7,13 @@ import { OPTION_LABELS } from "@/components/MCQOption";
 import type { Choice } from "@/lib/distractors";
 import type { StudyQuestion } from "@/lib/types";
 
-/** Generous vertical padding leaves room for the label at the top and the hint
- * at the bottom without crowding long questions. */
+/** The label and the corner actions need clearance, and so does the hint.
+ * On a phone that clearance is only as deep as those controls — the desktop
+ * card keeps the deeper inset so a short question still sits in the middle. */
 const CARD =
   "flex min-h-64 w-full flex-col items-center justify-center gap-3 overflow-y-auto " +
-  "rounded-2xl border px-6 py-16 text-center transition-colors duration-150 sm:min-h-80 sm:px-10";
+  "rounded-2xl border px-6 pt-14 pb-12 text-center transition-colors duration-150 " +
+  "sm:min-h-80 sm:px-10 sm:py-16";
 
 export function EmbeddedFlashcard({
   question,
@@ -69,7 +71,7 @@ export function EmbeddedFlashcard({
         <span
           key={`${question.id}:${revealed ? "a" : "q"}`}
           data-card-enter
-          className="flex w-full flex-col items-center gap-3"
+          className="flex w-full flex-col items-center gap-2 sm:gap-3"
         >
           {revealed ? (
             <>
@@ -93,11 +95,13 @@ export function EmbeddedFlashcard({
                 {question.question_text}
               </span>
               {choices && choices.length > 0 ? (
-                <span className="mt-2 flex w-full max-w-lg flex-col gap-2 text-left">
+                // Parent gap already separates this from the stem. The extra
+                // top margin keeps the desktop card's old rhythm.
+                <span className="flex w-full max-w-lg flex-col gap-1.5 text-left sm:mt-2 sm:gap-2">
                   {choices.map((choice, i) => (
                     <span
                       key={choice.text}
-                      className="flex items-start gap-2.5 rounded-lg border border-line px-3 py-2"
+                      className="flex items-start gap-2.5 rounded-lg border border-line px-3 py-1.5 sm:py-2"
                     >
                       <span
                         aria-hidden

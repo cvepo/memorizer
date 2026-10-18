@@ -24,10 +24,11 @@ export const MASTERY_LABELS: Record<MasteryLevel, string> = {
 };
 
 /** Answers to leave between a question and its next appearance. */
-const SPACING: Record<"wrong" | "learning" | "familiar", [number, number]> = {
+const SPACING: Record<"wrong" | "learning" | "familiar" | "mastered", [number, number]> = {
   wrong: [2, 4],
   learning: [4, 7],
   familiar: [7, 12],
+  mastered: [20, 45],
 };
 
 export type CheckpointRange = { min: number; max: number };
@@ -115,6 +116,7 @@ export function levelDown(mastery: MasteryLevel): MasteryLevel {
 
 function spacingFor(mastery: MasteryLevel, wasCorrect: boolean): number {
   if (!wasCorrect) return randomBetween(...SPACING.wrong);
+  if (mastery === MASTERY_MASTERED) return randomBetween(...SPACING.mastered);
   if (mastery === 1) return randomBetween(...SPACING.learning);
   return randomBetween(...SPACING.familiar);
 }
@@ -299,6 +301,26 @@ export function applyAnswer(
     }
   }
 
+  // Mastered does not mean unforgettable. Occasional checks catch slips while
+  // two review slots leave room for new material; once everything is mastered,
+  // the pool must be free to drain into endless review.
+  if (
+    !state.endless &&
+    pool.filter((id) => states[id].mastery >= MASTERY_MASTERED).length < 2 &&
+    (backlog.length > 0 || Object.values(states).some((s) => s.mastery < MASTERY_MASTERED)) &&
+    randomBetween(1, 4) === 1
+  ) {
+    const dueMastered = Object.keys(states).filter((id) =>
+      states[id].mastery === MASTERY_MASTERED &&
+      states[id].dueAt <= answered &&
+      id !== questionId &&
+      !pool.includes(id),
+    );
+    if (dueMastered.length > 0) {
+      pool = [...pool, dueMastered[randomBetween(0, dueMastered.length - 1)]];
+    }
+  }
+
   // Nothing left to master: keep going with whatever is weakest rather than
   // ending the session.
   let endless = state.endless;
@@ -331,7 +353,7 @@ export function applyAnswer(
       ? checkpointTarget(state.checkpointRange)
       : state.checkpointTarget,
     checkpointRange: state.checkpointRange,
-    masteredThisSession: becameMastered
+    masteredThisSession: becameMastered && !state.masteredThisSession.includes(questionId)
       ? [...state.masteredThisSession, questionId]
       : state.masteredThisSession,
     endless,
