@@ -178,6 +178,15 @@ export type AchievementRow = {
   backfilled: boolean;
 };
 
+export type AnswerEventRow = {
+  id: string;
+  profile_id: string;
+  question_id: string;
+  was_correct: boolean;
+  source: string;
+  created_at: string;
+};
+
 export type ProfileStatsRow = {
   profile_id: string;
   lifetime_correct: number;
@@ -235,6 +244,13 @@ export type Database = {
         [BelongsTo<"achievements_profile_id_fkey", "profile_id", "profiles">]
       >;
       profile_stats: Row<ProfileStatsRow>;
+      answer_events: Row<
+        AnswerEventRow,
+        [
+          BelongsTo<"answer_events_profile_id_fkey", "profile_id", "profiles">,
+          BelongsTo<"answer_events_question_id_fkey", "question_id", "questions">,
+        ]
+      >;
     };
     Views: Record<never, never>;
     Functions: {
