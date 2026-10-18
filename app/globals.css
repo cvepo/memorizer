@@ -185,6 +185,15 @@ body {
   }
 }
 
+@keyframes card-enter-fade {
+  from {
+    opacity: 0.25;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 [data-card-enter] {
   animation: card-enter 220ms cubic-bezier(0.2, 0, 0, 1);
 }
@@ -194,12 +203,21 @@ body {
    stops, including the new-card slide above, so a card simply replaces the
    previous one. The saved in-app choice is never touched by the device setting. */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *:not([data-card-enter]),
+  *:not([data-card-enter])::before,
+  *:not([data-card-enter])::after {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+
+  /* The one exception. The device setting says "less motion", not "no feedback",
+     and without this a new card replaces the old one with nothing to mark the
+     change, which reads as the card never having advanced. Sliding becomes a
+     plain fade: the arrival is still legible, the movement is gone. The in-app
+     Animations switch below is an explicit choice and is not excepted. */
+  [data-card-enter] {
+    animation: card-enter-fade 160ms linear !important;
   }
 }
 
