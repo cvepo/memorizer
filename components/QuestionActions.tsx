@@ -13,6 +13,37 @@ const FIX_INITIAL: QuickFixState = { error: null };
 const ITEM =
   "flex min-h-11 w-full items-center rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-surface-2";
 
+const REPORT_ADDRESS = "emh274@cornell.edu";
+
+function reportMailto({
+  questionText,
+  correctAnswer,
+  topic,
+  deckId,
+  questionId,
+}: {
+  questionText: string;
+  correctAnswer: string;
+  topic: string | null;
+  deckId: string;
+  questionId: string;
+}) {
+  const subject = "Memorizer — problem with a question";
+  const body = [
+    `Question: ${questionText}`,
+    `Stored answer: ${correctAnswer}`,
+    `Topic: ${topic || "none"}`,
+    `Deck: ${deckId}`,
+    `Question id: ${questionId}`,
+    "",
+    "What's wrong:",
+  ].join("\n");
+
+  // Question text can contain &, #, ? and newlines. Left raw, any of those
+  // ends the query and the mail client drops the rest of the report.
+  return `mailto:${REPORT_ADDRESS}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
 type View = "menu" | "fix" | "delete";
 
 /**
@@ -239,6 +270,21 @@ export function QuestionActions({
               <button type="button" role="menuitem" className={cn(ITEM, "text-ink")} onClick={toggleIgnored}>
                 {optimistic ? "Unhide question" : "Hide question"}
               </button>
+              <a
+                role="menuitem"
+                href={reportMailto({ questionText, correctAnswer, topic, deckId, questionId })}
+                className={cn(ITEM, "text-ink")}
+                onClick={(event) => {
+                  // keep() would preventDefault and the mail client would never
+                  // open. The card behind the menu is a reveal target, so the
+                  // click still must not reach it.
+                  event.stopPropagation();
+                  // Closing here unmounts this link before the browser follows it.
+                  queueMicrotask(() => close());
+                }}
+              >
+                Report a problem
+              </a>
               {isAdmin ? (
                 <>
                   <button
