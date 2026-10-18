@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { cn } from "@/components/ui";
+import { animationsDisabled, subscribeMotion } from "@/lib/motion";
 
 /* ---------------------------------------------------------------------------
    A small black cat that reacts to what just happened in the study flow.
@@ -11,11 +12,11 @@ import { cn } from "@/components/ui";
    the silhouette stays readable on the dark UI and the rim doubles as the
    state's colour (green for correct, red for wrong, blurple for milestones).
 
-   Motion runs through the Web Animations API rather than CSS keyframes for two
-   reasons: it replays on demand (see `replayKey`), and it sidesteps the global
-   reduced-motion rule in globals.css, which flattens CSS animation durations
-   for everything that is not a `[data-card-enter]` element. Reduced motion is
-   therefore honoured here explicitly, in JS.
+   Motion runs through the Web Animations API rather than CSS keyframes because
+   it replays on demand (see `replayKey`). CSS cannot reach it, so the global
+   "no animations" rule in globals.css does not apply here: whether animations
+   are disabled, by the device or by the app's own switch, is checked in JS
+   (lib/motion.ts), and a running animation is cancelled if that changes.
 --------------------------------------------------------------------------- */
 
 export type MascotState =
@@ -113,17 +114,6 @@ const MOTIONS: Record<MascotState, Motion | null> = {
   },
 };
 
-function prefersReducedMotion(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  try {
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  } catch {
-    return false;
-  }
-}
-
 /** A four-point sparkle centred on (cx, cy). */
 function sparkle(cx: number, cy: number, r: number): string {
   const k = r * 0.28;
@@ -138,14 +128,15 @@ function sparkle(cx: number, cy: number, r: number): string {
 }
 
 // Head plus ears as a single silhouette, so one stroke rims the whole shape.
-const HEAD =
+// Shared with the CatLogo and app/icon.svg, so the logo is the same cat.
+export const HEAD =
   "M12.5 7.5 L27 17 C30 16 34 16 37 17 L51.5 7.5 L53 27 " +
   "C54.5 30 55 33.5 55 37 C55 48 45 55 32 55 " +
   "C19 55 9 48 9 37 C9 33.5 9.5 30 10.5 27 Z";
 
-const INNER_EARS = "M15.5 13 L25 18.5 L14 24 Z M48.5 13 L39 18.5 L50 24 Z";
+export const INNER_EARS = "M15.5 13 L25 18.5 L14 24 Z M48.5 13 L39 18.5 L50 24 Z";
 
-const WHISKERS =
+export const WHISKERS =
   "M20 39.5 L6.5 36.5 M19.5 42.8 L5.5 42.4 M20 46 L7 49 " +
   "M44 39.5 L57.5 36.5 M44.5 42.8 L58.5 42.4 M44 46 L57 49";
 
@@ -244,10 +235,24 @@ export function Mascot({
     const motion = MOTIONS[state];
     if (!node || !motion) return;
     if (typeof node.animate !== "function") return;
-    if (prefersReducedMotion()) return;
 
-    const animation = node.animate(motion.frames, motion.options);
-    return () => animation.cancel();
+    let animation: Animation | null = animationsDisabled()
+      ? null
+      : node.animate(motion.frames, motion.options);
+
+    // If animations are switched off while this one is running, stop it at once;
+    // cancelling drops the animated styles and leaves the mascot at rest.
+    const unsubscribe = subscribeMotion(() => {
+      if (animationsDisabled() && animation) {
+        animation.cancel();
+        animation = null;
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      animation?.cancel();
+    };
   }, [state, replayKey]);
 
   return (

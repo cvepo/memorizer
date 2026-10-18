@@ -606,3 +606,122 @@ export async function getPendingBadges(profileId: string): Promise<EarnedBadge[]
   );
   return ((rows ?? []) as AchievementRow[]).map(toEarnedBadge);
 }
+
+// ---------------------------------------------------------------------------
+// Answer leaderboards (today and this week)
+// ---------------------------------------------------------------------------
+
+/**
+ * "Today" and "this week" for the leaderboards. One shared clock for everyone,
+ * so the boards reset at the same moment for every player, not per browser.
+ */
+export const LEADERBOARD_TIME_ZONE = "America/New_York";
+
+/** Milliseconds `timeZone` is ahead of UTC at `instant` (negative west of UTC). */
+function zoneOffsetMs(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(instant);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  return asUtc - Math.floor(instant.getTime() / 1000) * 1000;
+}
+
+/** The UTC instant of midnight at the start of a calendar date in `timeZone`. */
+function midnightIn(timeZone: string, year: number, month: number, day: number): Date {
+  const midnightAsUtc = Date.UTC(year, month, day);
+  // Read the offset near midnight, then again at the result, so daylight-saving
+  // days land on the real local midnight.
+  const guess = new Date(midnightAsUtc - zoneOffsetMs(new Date(midnightAsUtc), timeZone));
+  return new Date(midnightAsUtc - zoneOffsetMs(guess, timeZone));
+}
+
+/** Today's date in `timeZone`, read as UTC fields of a shifted Date. */
+function localDate(timeZone: string, now: Date): Date {
+  return new Date(now.getTime() + zoneOffsetMs(now, timeZone));
+}
+
+/** The UTC instant of the most recent midnight in `timeZone`. */
+export function startOfDayIn(timeZone: string, now: Date = new Date()): Date {
+  const local = localDate(timeZone, now);
+  return midnightIn(timeZone, local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
+}
+
+/** The UTC instant of the most recent Monday midnight in `timeZone`. */
+export function startOfWeekIn(timeZone: string, now: Date = new Date()): Date {
+  const local = localDate(timeZone, now);
+  const daysSinceMonday = (local.getUTCDay() + 6) % 7;
+  return midnightIn(
+    timeZone,
+    local.getUTCFullYear(),
+    local.getUTCMonth(),
+    local.getUTCDate() - daysSinceMonday,
+  );
+}
+
+export type LeaderboardRow = {
+  profileId: string;
+  name: string;
+  answered: number;
+  /** Shared after a tie, then skipped: 1, 2, 2, 4. */
+  rank: number;
+};
+
+/**
+ * Questions answered per profile since `since`, from answer_events. That ledger
+ * holds one row per graded Learn or Quiz answer and ignores replays, so a
+ * retried answer never counts twice. Flashcards record no answers and so never
+ * count.
+ *
+ * One count query per profile rather than fetching rows: a select is capped at
+ * 1,000 rows, which a busy week could pass, while a count is exact.
+ */
+async function answersLeaderboard(
+  profiles: Pick<Profile, "id" | "name">[],
+  since: Date,
+): Promise<LeaderboardRow[]> {
+  const db = supabase();
+  const counted = await Promise.all(
+    profiles.map(async (profile) => {
+      const { count, error } = await db
+        .from("answer_events")
+        .select("id", { count: "exact", head: true })
+        .eq("profile_id", profile.id)
+        .gte("created_at", since.toISOString());
+      if (error) throw new Error(error.message);
+      return { profileId: profile.id, name: profile.name, answered: count ?? 0 };
+    }),
+  );
+
+  const ordered = counted
+    .filter((row) => row.answered > 0)
+    .sort((a, b) => b.answered - a.answered || a.name.localeCompare(b.name));
+
+  // Ties share a rank and the next rank skips: 1, 2, 2, 4.
+  return ordered.map((row) => ({
+    ...row,
+    rank: ordered.findIndex((r) => r.answered === row.answered) + 1,
+  }));
+}
+
+/** Today's and this week's boards, for the home page toggle. */
+export async function answerLeaderboards(
+  now: Date = new Date(),
+): Promise<{ today: LeaderboardRow[]; week: LeaderboardRow[] }> {
+  const profiles = (unwrap(await supabase().from("profiles").select("id, name")) ?? []) as Pick<
+    Profile,
+    "id" | "name"
+  >[];
+  const [today, week] = await Promise.all([
+    answersLeaderboard(profiles, startOfDayIn(LEADERBOARD_TIME_ZONE, now)),
+    answersLeaderboard(profiles, startOfWeekIn(LEADERBOARD_TIME_ZONE, now)),
+  ]);
+  return { today, week };
+}

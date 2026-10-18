@@ -62,7 +62,7 @@ export default async function DeckPage({ params }: PageProps<"/decks/[deckId]">)
   const ignoredIds = summaries.filter((q) => q.ignored).map((q) => q.id);
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6">
+    <div className="space-y-6">
       <div className="space-y-3">
         {deck.course ? (
           <Link

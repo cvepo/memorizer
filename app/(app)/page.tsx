@@ -2,9 +2,17 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { ButtonLink, Card, EmptyState, MasteryBreakdown, PageHeader, ProgressBar } from "@/components/ui";
+import { Leaderboard } from "@/components/Leaderboard";
 import { DeckCard } from "@/components/DeckCard";
 import { getSession } from "@/lib/auth";
-import { deckStatsByDeck, emptyStats, listCourses, listDecksWithCourse, recentStudyActivity } from "@/lib/data";
+import {
+  answerLeaderboards,
+  deckStatsByDeck,
+  emptyStats,
+  listCourses,
+  listDecksWithCourse,
+  recentStudyActivity,
+} from "@/lib/data";
 import type { StudyMode } from "@/lib/types";
 
 export const metadata = { title: "Study · Memorizer" };
@@ -50,11 +58,13 @@ export default async function HomePage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const [courses, decks, deckStats, activity] = await Promise.all([
+  const [courses, decks, deckStats, activity, leaderboard] = await Promise.all([
     listCourses(),
     listDecksWithCourse(),
     deckStatsByDeck(session.profileId),
     recentStudyActivity(session.profileId, ACTIVITY_LIMIT),
+    // The leaderboard is a bonus; if it fails the page still loads without it.
+    answerLeaderboards().catch(() => null),
   ]);
 
   const isAdmin = session.role === "admin";
@@ -101,93 +111,109 @@ export default async function HomePage() {
         }
       />
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Continue studying</h2>
-        {continueDeck && continueActivity && continueStats ? (
-          <Card className="space-y-4">
-            <div>
-              {continueDeck.course ? <p className="text-xs text-muted">{continueDeck.course.name}</p> : null}
-              <h3 className="text-lg font-medium">{continueDeck.name}</h3>
-              <p className="mt-1 text-xs text-muted">
-                Last studied {relativeTime(continueActivity.last_studied_at)}
-              </p>
-            </div>
-            <ProgressBar value={continueStats.mastered} total={continueStats.total_questions} />
-            <MasteryBreakdown
-              mastered={continueStats.mastered}
-              learning={continueStats.learning}
-              unseen={continueStats.unseen}
+      {/* On laptops the leaderboard sits in a column beside the study content;
+          on phones it comes first, since it is what greets you after sign-in. */}
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
+        {leaderboard ? (
+          <aside className="lg:sticky lg:top-20 lg:col-start-2 lg:row-start-1">
+            <Leaderboard
+              today={leaderboard.today}
+              week={leaderboard.week}
+              currentProfileId={session.profileId}
             />
-            <div className="flex flex-wrap gap-2">
-              <ButtonLink href={MODE_HREF[continueActivity.last_mode](continueDeck.id)}>
-                {MODE_LABEL[continueActivity.last_mode]}
-              </ButtonLink>
-              <ButtonLink href={`/decks/${continueDeck.id}`} variant="secondary">
-                Deck overview
-              </ButtonLink>
-            </div>
-          </Card>
-        ) : (
-          <EmptyState
-            title="Choose a deck to start"
-            description="Once you study a deck, you can jump right back in from here."
-            action={<ButtonLink href="/decks">Browse decks</ButtonLink>}
-          />
-        )}
-      </section>
+          </aside>
+        ) : null}
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Courses</h2>
-        {courses.length === 0 ? (
-          <EmptyState
-            title="No courses yet"
-            action={isAdmin ? <ButtonLink href="/import">Import questions</ButtonLink> : null}
-          />
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {courses.map((course) => {
-              const courseDecks = decks.filter((deck) => deck.course_id === course.id);
-              const questionCount = courseDecks.reduce(
-                (sum, deck) => sum + (deckStats.get(deck.id)?.total_questions ?? 0),
-                0,
-              );
-              return (
-                <Link
-                  key={course.id}
-                  href={`/courses/${course.id}`}
-                  className="block rounded-2xl border border-line bg-surface p-5 transition-colors duration-150 hover:border-line-strong hover:bg-surface-2"
-                >
-                  <h3 className="font-medium">{course.name}</h3>
-                  <p className="mt-1 text-sm text-muted">
-                    {courseDecks.length} {courseDecks.length === 1 ? "deck" : "decks"} ·{" "}
-                    {questionCount} {questionCount === 1 ? "question" : "questions"}
+        <div className="min-w-0 space-y-8 lg:col-start-1 lg:row-start-1">
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium">Continue studying</h2>
+            {continueDeck && continueActivity && continueStats ? (
+              <Card className="space-y-4">
+                <div>
+                  {continueDeck.course ? <p className="text-xs text-muted">{continueDeck.course.name}</p> : null}
+                  <h3 className="text-lg font-medium">{continueDeck.name}</h3>
+                  <p className="mt-1 text-xs text-muted">
+                    Last studied {relativeTime(continueActivity.last_studied_at)}
                   </p>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Recent decks</h2>
-        {recentDecks.length === 0 ? (
-          <EmptyState title="No decks yet" description="Decks you study will show up here." />
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {recentDecks.map((deck) => (
-              <DeckCard
-                key={deck.id}
-                deckId={deck.id}
-                name={deck.name}
-                courseName={deck.course?.name}
-                description={deck.description}
-                stats={deckStats.get(deck.id) ?? emptyStats(deck.id)}
+                </div>
+                <ProgressBar value={continueStats.mastered} total={continueStats.total_questions} />
+                <MasteryBreakdown
+                  mastered={continueStats.mastered}
+                  learning={continueStats.learning}
+                  unseen={continueStats.unseen}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <ButtonLink href={MODE_HREF[continueActivity.last_mode](continueDeck.id)}>
+                    {MODE_LABEL[continueActivity.last_mode]}
+                  </ButtonLink>
+                  <ButtonLink href={`/decks/${continueDeck.id}`} variant="secondary">
+                    Deck overview
+                  </ButtonLink>
+                </div>
+              </Card>
+            ) : (
+              <EmptyState
+                title="Choose a deck to start"
+                description="Once you study a deck, you can jump right back in from here."
+                action={<ButtonLink href="/decks">Browse decks</ButtonLink>}
               />
-            ))}
-          </div>
-        )}
-      </section>
+            )}
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium">Courses</h2>
+            {courses.length === 0 ? (
+              <EmptyState
+                title="No courses yet"
+                action={isAdmin ? <ButtonLink href="/import">Import questions</ButtonLink> : null}
+              />
+            ) : (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+                {courses.map((course) => {
+                  const courseDecks = decks.filter((deck) => deck.course_id === course.id);
+                  const questionCount = courseDecks.reduce(
+                    (sum, deck) => sum + (deckStats.get(deck.id)?.total_questions ?? 0),
+                    0,
+                  );
+                  return (
+                    <Link
+                      key={course.id}
+                      href={`/courses/${course.id}`}
+                      className="block rounded-2xl border border-line bg-surface p-5 transition-colors duration-150 hover:border-line-strong hover:bg-surface-2"
+                    >
+                      <h3 className="font-medium">{course.name}</h3>
+                      <p className="mt-1 text-sm text-muted">
+                        {courseDecks.length} {courseDecks.length === 1 ? "deck" : "decks"} ·{" "}
+                        {questionCount} {questionCount === 1 ? "question" : "questions"}
+                      </p>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium">Recent decks</h2>
+            {recentDecks.length === 0 ? (
+              <EmptyState title="No decks yet" description="Decks you study will show up here." />
+            ) : (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+                {recentDecks.map((deck) => (
+                  <DeckCard
+                    key={deck.id}
+                    deckId={deck.id}
+                    name={deck.name}
+                    courseName={deck.course?.name}
+                    description={deck.description}
+                    stats={deckStats.get(deck.id) ?? emptyStats(deck.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
     </div>
   );
 }

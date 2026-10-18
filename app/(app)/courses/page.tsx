@@ -27,7 +27,7 @@ export default async function CoursesPage() {
       {courses.length === 0 ? (
         <EmptyState title="No courses yet" description={isAdmin ? "Create your first course below." : "Once an admin adds a course it will show up here."} />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {courses.map((course) => {
             const courseDecks = decks.filter((deck) => deck.course_id === course.id);
             const questionCount = courseDecks.reduce(

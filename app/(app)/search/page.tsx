@@ -37,7 +37,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
               <h2 className="text-lg font-medium">
                 Courses <span className="text-sm font-normal text-muted">({results.courses.length})</span>
               </h2>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {results.courses.map((course) => (
                   <Link
                     key={course.id}
@@ -59,7 +59,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
               <h2 className="text-lg font-medium">
                 Decks <span className="text-sm font-normal text-muted">({results.decks.length})</span>
               </h2>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {results.decks.map((deck) => (
                   <Link
                     key={deck.id}
