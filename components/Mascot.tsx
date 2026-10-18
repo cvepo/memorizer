@@ -128,14 +128,15 @@ function sparkle(cx: number, cy: number, r: number): string {
 }
 
 // Head plus ears as a single silhouette, so one stroke rims the whole shape.
-const HEAD =
+// Shared with the CatLogo and app/icon.svg, so the logo is the same cat.
+export const HEAD =
   "M12.5 7.5 L27 17 C30 16 34 16 37 17 L51.5 7.5 L53 27 " +
   "C54.5 30 55 33.5 55 37 C55 48 45 55 32 55 " +
   "C19 55 9 48 9 37 C9 33.5 9.5 30 10.5 27 Z";
 
-const INNER_EARS = "M15.5 13 L25 18.5 L14 24 Z M48.5 13 L39 18.5 L50 24 Z";
+export const INNER_EARS = "M15.5 13 L25 18.5 L14 24 Z M48.5 13 L39 18.5 L50 24 Z";
 
-const WHISKERS =
+export const WHISKERS =
   "M20 39.5 L6.5 36.5 M19.5 42.8 L5.5 42.4 M20 46 L7 49 " +
   "M44 39.5 L57.5 36.5 M44.5 42.8 L58.5 42.4 M44 46 L57 49";
 

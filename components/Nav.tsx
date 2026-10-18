@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 import { Badge, cn } from "@/components/ui";
+import { CatLogo } from "@/components/CatLogo";
 import { MotionToggle } from "@/components/MotionToggle";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { signOut } from "@/lib/actions/auth";
@@ -32,8 +33,9 @@ export function Nav({ profileName, isAdmin }: { profileName: string; isAdmin: bo
 
   return (
     <header className="sticky top-0 z-20 border-b border-line bg-bg/90 backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-5xl items-center gap-3 px-4">
-        <Link href="/" className="inline-flex min-h-11 items-center font-semibold tracking-tight">
+      <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
+        <Link href="/" className="inline-flex min-h-11 items-center gap-2 font-semibold tracking-tight">
+          <CatLogo />
           Memorizer
         </Link>
 
