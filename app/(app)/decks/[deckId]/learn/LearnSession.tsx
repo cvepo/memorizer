@@ -6,7 +6,7 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState, use
 import { KeyboardHints, type KeyHint } from "@/components/KeyboardHints";
 import { MCQOption, OPTION_LABELS, type OptionState } from "@/components/MCQOption";
 import { Mascot, type MascotState } from "@/components/Mascot";
-import { RangeSlider } from "@/components/RangeSlider";
+import { Slider } from "@/components/Slider";
 import { SaveStatus } from "@/components/SaveStatus";
 import { QuestionActions } from "@/components/QuestionActions";
 import { StarButton } from "@/components/StarButton";
@@ -18,16 +18,18 @@ import type { EarnedBadge } from "@/lib/badges";
 import { AnswerQueue, newEventId, type QueueStatus } from "@/lib/answerQueue";
 import { generateChoices, maxAvailableChoices, type Choice } from "@/lib/distractors";
 import {
-  CHECKPOINT_LIMITS,
-  DEFAULT_CHECKPOINT_RANGE,
+  CHECKPOINT_MIN,
+  DEFAULT_CHECKPOINT,
   MASTERY_MASTERED,
   POOL_SIZE,
   applyAnswer,
+  checkpointMaxFor,
   countsFor,
   createLearnState,
   isComplete,
-  withCheckpointRange,
-  type CheckpointRange,
+  normalizeCheckpoint,
+  withCheckpoint,
+  type CheckpointSetting,
   type Counts,
   type LearnState,
 } from "@/lib/learnAlgorithm";
@@ -51,7 +53,17 @@ function optionHints(count: number): KeyHint[] {
 
 const NEXT_HINT: KeyHint = { keys: ["Enter", "Space", "→"], label: "Next question" };
 const CELEBRATION_STREAK = 5;
-const RANGE_STORAGE_KEY = "memorizer-checkpoint-range";
+/** Original key, kept so a saved { min, max } is still there to migrate. */
+const LENGTH_STORAGE_KEY = "memorizer-checkpoint-range";
+
+/**
+ * Per person, not per deck. Same shape as the flashcard position key, without
+ * a deck id: varying checkpoints is how you like to study, not a property of
+ * one deck. Profile settings write this same key.
+ */
+function jitterStorageKey(profileId: string) {
+  return `memorizer-checkpoint-jitter:${profileId}`;
+}
 /** Stable reference so `useSyncExternalStore` does not loop before the queue exists. */
 const IDLE_SAVE: QueueStatus = { kind: "idle" };
 
@@ -98,19 +110,140 @@ function removeFromLearnPool(state: LearnState, questionId: string): LearnState 
   };
 }
 
-function readStoredRange(): CheckpointRange | null {
+function readJson(key: string): unknown {
   try {
-    const raw = localStorage.getItem(RANGE_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<CheckpointRange>;
-    if (typeof parsed.min !== "number" || typeof parsed.max !== "number") return null;
-    const min = Math.min(Math.max(parsed.min, CHECKPOINT_LIMITS.min), CHECKPOINT_LIMITS.max);
-    const max = Math.min(Math.max(parsed.max, min), CHECKPOINT_LIMITS.max);
-    return { min, max };
+    const raw = localStorage.getItem(key);
+    if (raw === null) return undefined;
+    return JSON.parse(raw) as unknown;
   } catch {
-    return null;
+    return undefined;
   }
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The previous slider stored { min, max } on the length key. */
+function isLegacyRange(value: unknown): boolean {
+  return isRecord(value) && "min" in value && "max" in value && !("length" in value);
+}
+
+function writeStoredLength(length: number) {
+  try {
+    localStorage.setItem(LENGTH_STORAGE_KEY, JSON.stringify({ length }));
+  } catch {
+    // Private mode: the choice applies now but will not persist.
+  }
+}
+
+function writeStoredJitter(profileId: string, jitter: number) {
+  try {
+    localStorage.setItem(jitterStorageKey(profileId), JSON.stringify(jitter));
+  } catch {
+    // Private mode: the choice applies now but will not persist.
+  }
+}
+
+/**
+ * Length stays on the original key so a saved { min, max } is migrated
+ * rather than dropped. A jitter this profile has saved replaces the spread
+ * that migration would invent.
+ *
+ * Keep this in step with CheckpointPreference. A partial { length } handed
+ * to normalizeCheckpoint on its own is treated as invalid, so both fields
+ * are filled in first.
+ */
+function readStoredCheckpoint(profileId: string, deckSize: number): {
+  setting: CheckpointSetting;
+  legacy: boolean;
+} {
+  const storedLength = readJson(LENGTH_STORAGE_KEY);
+  const storedJitter = readJson(jitterStorageKey(profileId));
+  const legacy = isLegacyRange(storedLength);
+
+  if (legacy && typeof storedJitter !== "number") {
+    return { setting: normalizeCheckpoint(storedLength, deckSize), legacy };
+  }
+
+  const migrated = legacy ? normalizeCheckpoint(storedLength, deckSize) : null;
+  const length =
+    migrated?.length ??
+    (isRecord(storedLength) &&
+    typeof storedLength.length === "number" &&
+    Number.isFinite(storedLength.length)
+      ? storedLength.length
+      : DEFAULT_CHECKPOINT.length);
+  // A non-finite jitter must not be passed through: normalizeCheckpoint
+  // rejects the whole setting, which would throw away a valid length.
+  const jitter =
+    typeof storedJitter === "number" && Number.isFinite(storedJitter)
+      ? storedJitter
+      : (migrated?.jitter ?? DEFAULT_CHECKPOINT.jitter);
+
+  return { setting: normalizeCheckpoint({ length, jitter }, deckSize), legacy };
+}
+
+/**
+ * On a short phone the sticky site header is 57px the question cannot spare.
+ * Letting it scroll away would not give that space back: a sticky row still
+ * occupies its place in the layout. Collapsing it out of flow, only below
+ * `sm` and only while this stylesheet is mounted (a question is on screen), does.
+ * Ready, checkpoint and done stay short, so they keep the header.
+ *
+ * The menu button stays fixed in the corner. The query is Tailwind's `sm`
+ * (40rem) so it flips with the session's own `sm:` classes; at `sm` and up
+ * the header is unchanged. Exit in the progress strip is the way out of the
+ * session and is not touched.
+ */
+const PHONE_QUESTION_HEADER_CSS = `
+@media (max-width: 39.999rem) {
+  body > header.sticky {
+    position: fixed;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 30;
+    height: 0;
+    min-height: 0;
+    border: 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    overflow: visible;
+    pointer-events: none;
+  }
+  body > header.sticky > div:first-child {
+    height: 0;
+    min-height: 0;
+    padding: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+  body > header.sticky > div:first-child > a,
+  body > header.sticky > div:first-child > nav {
+    display: none;
+  }
+  body > header.sticky button[aria-label="Menu"] {
+    pointer-events: auto;
+    position: fixed;
+    top: 0.25rem;
+    right: 0.25rem;
+    z-index: 40;
+    background-color: var(--bg);
+  }
+  body > header.sticky > div:not(:first-child) {
+    pointer-events: auto;
+    position: fixed;
+    top: 3.25rem;
+    right: 0;
+    left: 0;
+    z-index: 40;
+    max-height: calc(100dvh - 3.25rem);
+    overflow: auto;
+  }
+}
+`;
 
 /** Small coloured tally of how the deck is spread across the four levels. */
 function LevelCounts({ counts, className }: { counts: Counts; className?: string }) {
@@ -217,7 +350,7 @@ function LearnSessionView({
   const [starred, setStarred] = useState<Set<string>>(() => new Set(starredIds));
   /** Questions set aside or deleted this session. They leave the counts and the pool. */
   const [excluded, setExcluded] = useState<Set<string>>(() => new Set());
-  const [range, setRange] = useState<CheckpointRange>(DEFAULT_CHECKPOINT_RANGE);
+  const [checkpoint, setCheckpoint] = useState<CheckpointSetting>(DEFAULT_CHECKPOINT);
   const [state, setState] = useState<LearnState | null>(null);
 
   const [phase, setPhase] = useState<"answering" | "feedback" | "checkpoint" | "lap" | "done">("answering");
@@ -237,10 +370,15 @@ function LearnSessionView({
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    const saved = readStoredRange();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (saved) setRange(saved);
-    setState(createLearnState(seedQuestions, saved ?? DEFAULT_CHECKPOINT_RANGE));
+    const saved = readStoredCheckpoint(profileId, seedQuestions.length);
+    // Rewriting a legacy { min, max } without also storing its spread would
+    // forget the variation those two numbers used to express.
+    if (saved.legacy) {
+      writeStoredLength(saved.setting.length);
+      writeStoredJitter(profileId, saved.setting.jitter);
+    }
+    setCheckpoint(saved.setting);
+    setState(createLearnState(seedQuestions, saved.setting));
     setReady(true);
   }, [seedQuestions, profileId]);
 
@@ -351,15 +489,18 @@ function LearnSessionView({
     [question, questions],
   );
 
-  const updateRange = useCallback((next: CheckpointRange) => {
-    setRange(next);
-    setState((previous) => (previous ? withCheckpointRange(previous, next) : previous));
-    try {
-      localStorage.setItem(RANGE_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // Preference just will not persist.
-    }
-  }, []);
+  const updateLength = useCallback(
+    (length: number) => {
+      const next = normalizeCheckpoint({ length, jitter: checkpoint.jitter }, questions.length);
+      setCheckpoint(next);
+      setState((previous) => (previous ? withCheckpoint(previous, next) : previous));
+      writeStoredLength(next.length);
+      // The length key no longer carries the spread, so the profile jitter
+      // key has to hold whatever this session is actually using.
+      writeStoredJitter(profileId, next.jitter);
+    },
+    [checkpoint.jitter, questions.length, profileId],
+  );
 
   const grade = useCallback(
     (choice: Choice) => {
@@ -411,7 +552,7 @@ function LearnSessionView({
         const fresh = questions
           .filter((q) => !excluded.has(q.id))
           .map((q) => ({ ...q, progress: null }));
-        setState(createLearnState(fresh, range));
+        setState(createLearnState(fresh, checkpoint));
         setCheckpointCounts(null);
         setPhase("answering");
         setSelected(null);
@@ -424,17 +565,17 @@ function LearnSessionView({
         setResetting(false);
       }
     });
-  }, [deckId, questions, excluded, range]);
+  }, [deckId, questions, excluded, checkpoint]);
 
   const restart = useCallback(() => {
     const pool = seedQuestions.filter((question) => !excluded.has(question.id));
-    setState(createLearnState(pool, range));
+    setState(createLearnState(pool, checkpoint));
     setPhase("answering");
     setSelected(null);
     setWasCorrect(null);
     setCheckpointCounts(null);
     setPresentation((n) => n + 1);
-  }, [seedQuestions, excluded, range]);
+  }, [seedQuestions, excluded, checkpoint]);
 
   // A correct answer with nothing to read moves on by itself. Misses wait.
   useEffect(() => {
@@ -645,7 +786,9 @@ function LearnSessionView({
               <span>
                 Checkpoint every{" "}
                 <span className="tabular-nums">
-                  {range.min}–{range.max}
+                  {checkpoint.jitter > 0
+                    ? `${checkpoint.length} (+/- ${checkpoint.jitter})`
+                    : checkpoint.length}
                 </span>{" "}
                 mastered
               </span>
@@ -655,12 +798,17 @@ function LearnSessionView({
             </button>
             {showSettings ? (
               <div className="mt-4 space-y-5">
-                <RangeSlider
-                  label="Questions mastered between checkpoints"
-                  min={CHECKPOINT_LIMITS.min}
-                  max={CHECKPOINT_LIMITS.max}
-                  value={range}
-                  onChange={updateRange}
+                {/* Jitter is a profile preference. It is applied here, and shown
+                    in the summary when it is not zero, but it is not edited here. */}
+                <Slider
+                  label="Checkpoint every N mastered"
+                  min={CHECKPOINT_MIN}
+                  max={checkpointMaxFor(questions.length)}
+                  value={Math.min(
+                    checkpointMaxFor(questions.length),
+                    Math.max(CHECKPOINT_MIN, checkpoint.length),
+                  )}
+                  onChange={updateLength}
                 />
 
                 <div className="space-y-2 border-t border-line pt-4">
@@ -739,9 +887,11 @@ function LearnSessionView({
     counts.total > 0 ? Math.min(100, Math.round((counts.mastered / counts.total) * 100)) : 0;
 
   return (
-    // `gap` drops a `hidden` child, so the phone does not keep a margin for
-    // the breadcrumb row that is off screen.
-    <div className="flex flex-col gap-4 sm:gap-6">
+    <>
+      <style>{PHONE_QUESTION_HEADER_CSS}</style>
+      {/* `gap` drops a `hidden` child, so the phone does not keep a margin for
+          the breadcrumb row that is off screen. */}
+      <div className="flex flex-col gap-4 sm:gap-6">
       <div className="hidden sm:block">{breadcrumb}</div>
 
       {focusedReview ? (
@@ -753,11 +903,13 @@ function LearnSessionView({
         </p>
       ) : null}
 
-      <div className="sticky top-14 z-10 -mx-4 min-w-0 border-b border-line bg-bg sm:-mx-6">
+      <div className="sticky top-0 z-10 -mx-4 min-w-0 border-b border-line bg-bg sm:top-14 sm:-mx-6">
         {/* Back link, streak, tally and Exit share one line so a second row
             does not push the question into a scroll. The bar sits in the
-            bottom padding, under the controls. */}
-        <div className="relative flex items-center gap-2 px-4 pt-1 pb-2 sm:hidden">
+            bottom padding, under the controls. On a phone the site header is
+            out of flow, so this sticks to the top; the extra right padding
+            keeps Exit clear of the menu button pinned in that corner. */}
+        <div className="relative flex items-center gap-2 pt-1 pr-14 pb-2 pl-4 sm:hidden">
           <Link
             href={`/decks/${deckId}`}
             aria-label={`Back to ${deckName}`}
@@ -953,6 +1105,7 @@ function LearnSessionView({
       ) : null}
 
       <KeyboardHints hints={[...optionHints(choices?.length ?? 4), NEXT_HINT]} />
-    </div>
+      </div>
+    </>
   );
 }

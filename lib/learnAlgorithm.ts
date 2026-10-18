@@ -31,9 +31,55 @@ const SPACING: Record<"wrong" | "learning" | "familiar" | "mastered", [number, n
   mastered: [20, 45],
 };
 
-export type CheckpointRange = { min: number; max: number };
-export const CHECKPOINT_LIMITS = { min: 3, max: 25 } as const;
-export const DEFAULT_CHECKPOINT_RANGE: CheckpointRange = { min: 5, max: 10 };
+/** How many questions to master between checkpoints, and how much to vary it. */
+export type CheckpointSetting = { length: number; jitter: number };
+export const CHECKPOINT_MIN = 3;
+export const CHECKPOINT_MAX_SMALL = 25;
+export const CHECKPOINT_MAX_LARGE = 50;
+export const JITTER_MAX = 10;
+export const DEFAULT_CHECKPOINT: CheckpointSetting = { length: 8, jitter: 0 };
+
+/** A large deck needs room for longer stretches between checkpoints. */
+export function checkpointMaxFor(deckSize: number): number {
+  return deckSize > 100 ? CHECKPOINT_MAX_LARGE : CHECKPOINT_MAX_SMALL;
+}
+
+/** Stored preferences survive upgrades, but must still fit the sliders. */
+export function normalizeCheckpoint(raw: unknown, deckSize: number): CheckpointSetting {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...DEFAULT_CHECKPOINT };
+  }
+
+  let length: unknown;
+  let jitter: unknown;
+  if ("length" in raw || "jitter" in raw) {
+    length = "length" in raw ? raw.length : undefined;
+    jitter = "jitter" in raw ? raw.jitter : undefined;
+  } else if ("min" in raw && "max" in raw) {
+    const { min, max } = raw;
+    if (
+      typeof min !== "number" || typeof max !== "number" ||
+      !Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max < min
+    ) {
+      return { ...DEFAULT_CHECKPOINT };
+    }
+    // Preserve the old spread instead of silently switching existing users to a fixed length.
+    length = Math.round(min / 2 + max / 2);
+    jitter = Math.round((max - min) / 2);
+  }
+
+  if (
+    typeof length !== "number" || typeof jitter !== "number" ||
+    !Number.isFinite(length) || !Number.isFinite(jitter) || length < 0 || jitter < 0
+  ) {
+    return { ...DEFAULT_CHECKPOINT };
+  }
+
+  return {
+    length: Math.max(CHECKPOINT_MIN, Math.min(checkpointMaxFor(deckSize), Math.round(length))),
+    jitter: Math.max(0, Math.min(JITTER_MAX, Math.round(jitter))),
+  };
+}
 
 export type QuestionState = {
   mastery: MasteryLevel;
@@ -63,9 +109,9 @@ export type LearnState = {
   /** Newly mastered since the last checkpoint, and the target that triggers one. */
   masteredSinceCheckpoint: number;
   checkpointTarget: number;
-  /** Carried in the state so every answer uses the same range without the
+  /** Carried in the state so every answer uses the same setting without the
    *  caller having to remember to pass it. */
-  checkpointRange: CheckpointRange;
+  checkpointSetting: CheckpointSetting;
   /** Ids that reached Mastered during this session. */
   masteredThisSession: string[];
   /**
@@ -84,9 +130,9 @@ function randomBetween(min: number, max: number) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
-export function checkpointTarget(range: CheckpointRange): number {
-  const min = Math.max(1, Math.min(range.min, range.max));
-  return randomBetween(min, Math.max(min, range.max));
+export function checkpointTarget(setting: CheckpointSetting): number {
+  if (setting.jitter === 0) return Math.max(1, setting.length);
+  return Math.max(1, setting.length + randomBetween(-setting.jitter, setting.jitter));
 }
 
 const clampLevel = (n: number): MasteryLevel => Math.max(0, Math.min(MASTERY_MASTERED, n)) as MasteryLevel;
@@ -198,8 +244,9 @@ function sampleByWeakness(
 
 export function createLearnState(
   questions: readonly StudyQuestion[],
-  range: CheckpointRange = DEFAULT_CHECKPOINT_RANGE,
+  setting: CheckpointSetting = DEFAULT_CHECKPOINT,
 ): LearnState {
+  const checkpointSetting = normalizeCheckpoint(setting, questions.length);
   const states: Record<string, QuestionState> = {};
   for (const question of questions) states[question.id] = initialState(question);
 
@@ -224,8 +271,8 @@ export function createLearnState(
     bestStreak: 0,
     missed: [],
     masteredSinceCheckpoint: 0,
-    checkpointTarget: checkpointTarget(range),
-    checkpointRange: range,
+    checkpointTarget: checkpointTarget(checkpointSetting),
+    checkpointSetting,
     masteredThisSession: [],
     // A deck that is already fully mastered starts straight into review.
     endless: unmastered.length === 0,
@@ -350,9 +397,9 @@ export function applyAnswer(
     missed: wasCorrect || state.missed.includes(questionId) ? state.missed : [...state.missed, questionId],
     masteredSinceCheckpoint: reachedCheckpoint ? 0 : masteredSinceCheckpoint,
     checkpointTarget: reachedCheckpoint
-      ? checkpointTarget(state.checkpointRange)
+      ? checkpointTarget(state.checkpointSetting)
       : state.checkpointTarget,
-    checkpointRange: state.checkpointRange,
+    checkpointSetting: state.checkpointSetting,
     masteredThisSession: becameMastered && !state.masteredThisSession.includes(questionId)
       ? [...state.masteredThisSession, questionId]
       : state.masteredThisSession,
@@ -390,10 +437,11 @@ export function remainingCount(state: LearnState): number {
 }
 
 /** Change how often checkpoints appear without disturbing the session. */
-export function withCheckpointRange(state: LearnState, range: CheckpointRange): LearnState {
+export function withCheckpoint(state: LearnState, setting: CheckpointSetting): LearnState {
+  const checkpointSetting = normalizeCheckpoint(setting, Object.keys(state.states).length);
   return {
     ...state,
-    checkpointRange: range,
-    checkpointTarget: Math.max(1, Math.min(state.checkpointTarget, range.max)),
+    checkpointSetting,
+    checkpointTarget: checkpointTarget(checkpointSetting),
   };
 }
