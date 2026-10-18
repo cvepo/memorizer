@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 
 import "./globals.css";
 
@@ -35,7 +36,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className="flex min-h-full flex-col">{children}</body>
+      <body className="flex min-h-full flex-col">
+        {children}
+        {/* Page views and visitor counts. Collects no cookies and no personal
+            data, so it needs no consent banner. The script is same-origin
+            (/_vercel/insights), which the CSP already allows. */}
+        <Analytics />
+      </body>
     </html>
   );
 }

@@ -3,17 +3,21 @@ import type { NextConfig } from "next";
 const isDev = process.env.NODE_ENV === "development";
 
 /**
- * The app renders only its own content and loads no third-party scripts, so the
- * CSP can stay tight. 'unsafe-inline' is required for styles because Next
- * injects inline <style> tags, and for scripts because the App Router bootstraps
- * with inline JSON payloads.
+ * The app renders only its own content, so the CSP can stay tight.
+ * 'unsafe-inline' is required for styles because Next injects inline <style>
+ * tags, and for scripts because the App Router bootstraps with inline JSON
+ * payloads.
  *
- * 'unsafe-eval' is added in development only: React uses eval() for debugging
- * features such as reconstructing callstacks, and never in production.
+ * Two allowances are development-only and never reach production:
+ * 'unsafe-eval', because React uses eval() for debugging features such as
+ * reconstructing callstacks; and va.vercel-scripts.com, because @vercel/analytics
+ * swaps to a debug script hosted there when NODE_ENV is not production. In
+ * production the analytics script is same-origin at /_vercel/insights, so 'self'
+ * already covers both loading it and its beacons.
  */
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval' https://va.vercel-scripts.com" : ""}`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
   "img-src 'self' data: blob: https:",
