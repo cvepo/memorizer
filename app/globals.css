@@ -128,8 +128,14 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-* {
-  border-color: var(--border);
+/* Tailwind v4 dropped the default border colour, so this restores one. It has
+   to sit in a layer: unlayered rules beat every layered one regardless of
+   specificity, and utilities live in @layer utilities, so an unlayered version
+   of this silently defeats every border-* utility in the app. */
+@layer base {
+  * {
+    border-color: var(--border);
+  }
 }
 
 :where(button, a, input, select, textarea):focus-visible {
