@@ -111,11 +111,13 @@ export default async function HomePage() {
         }
       />
 
-      {/* On laptops the leaderboard sits in a column beside the study content;
-          on phones it comes first, since it is what greets you after sign-in. */}
+      {/* On laptops the leaderboard sits in its own column beside the study
+          content. On phones it drops below: the first thing you came for is
+          the deck you were in the middle of, not the scoreboard. The explicit
+          lg: placement pins both columns, so `order` only applies on phones. */}
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
         {leaderboard ? (
-          <aside className="lg:sticky lg:top-20 lg:col-start-2 lg:row-start-1">
+          <aside className="order-last lg:order-none lg:sticky lg:top-20 lg:col-start-2 lg:row-start-1">
             <Leaderboard
               today={leaderboard.today}
               week={leaderboard.week}
@@ -124,7 +126,7 @@ export default async function HomePage() {
           </aside>
         ) : null}
 
-        <div className="min-w-0 space-y-8 lg:col-start-1 lg:row-start-1">
+        <div className="order-first min-w-0 space-y-8 lg:order-none lg:col-start-1 lg:row-start-1">
           <section className="space-y-3">
             <h2 className="text-lg font-medium">Continue studying</h2>
             {continueDeck && continueActivity && continueStats ? (
