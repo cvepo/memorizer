@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { AdminProfiles } from "@/app/(app)/admin/AdminProfiles";
-import { EmptyState, PageHeader, Stat } from "@/components/ui";
+import { ButtonLink, EmptyState, PageHeader, Stat } from "@/components/ui";
 import { getSession } from "@/lib/auth";
 import { profileOverviews } from "@/lib/data";
 
@@ -37,6 +37,11 @@ export default async function AdminPage() {
       <PageHeader
         title="Admin"
         subtitle="Everyone studying this site, and how far along they are."
+        actions={
+          <ButtonLink href="/admin/analytics" variant="secondary">
+            Analytics
+          </ButtonLink>
+        }
       />
 
       <div className="flex flex-wrap gap-x-8 gap-y-3">
