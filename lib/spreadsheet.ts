@@ -55,8 +55,32 @@ const cell = (value: unknown): string => {
 
 const isBlankRow = (row: string[]) => row.every((value) => value === "");
 
+/**
+ * Text formats (CSV/TSV) carry no encoding in the bytes, so the reader falls
+ * back to a legacy codepage and turns UTF-8 punctuation into mojibake —
+ * "Athlete’s" arrives as "Athleteâ€™s". Decode text files as UTF-8 ourselves
+ * and leave the binary formats, which declare their own encoding, to the reader.
+ */
+function decodeTextFile(data: ArrayBuffer): string | null {
+  const bytes = new Uint8Array(data);
+  const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b; // xlsx, ods
+  const isOle = bytes[0] === 0xd0 && bytes[1] === 0xcf; // legacy xls
+  if (isZip || isOle) return null;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  } catch {
+    // Not UTF-8 — let the reader apply its own codepage detection.
+    return null;
+  }
+}
+
 export function readWorkbook(data: ArrayBuffer, sheetName?: string): SheetData {
-  const workbook = XLSX.read(data, { type: "array", cellDates: true });
+  const text = decodeTextFile(data);
+  const workbook =
+    text === null
+      ? XLSX.read(data, { type: "array", cellDates: true })
+      : XLSX.read(text, { type: "string", cellDates: true });
   const sheetNames = workbook.SheetNames;
   if (sheetNames.length === 0) throw new Error("This file does not contain any sheets.");
 
