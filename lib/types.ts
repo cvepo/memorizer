@@ -26,11 +26,21 @@ export type Deck = {
   updated_at: string;
 };
 
+/**
+ * How a question is answered.
+ *
+ *   single — exactly one choice is right; `correct_answer` is the truth.
+ *   multi  — any number of choices are right; `answer_choices.is_correct` is
+ *            the truth and `correct_answer` is only a readable summary.
+ */
+export type AnswerMode = "single" | "multi";
+
 export type Question = {
   id: string;
   deck_id: string;
   question_text: string;
   correct_answer: string;
+  answer_mode: AnswerMode;
   explanation: string | null;
   topic: string | null;
   image_url: string | null;

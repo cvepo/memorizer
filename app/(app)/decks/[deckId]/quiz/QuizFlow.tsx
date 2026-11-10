@@ -10,6 +10,12 @@ import { touchStudyActivity } from "@/lib/actions/activity";
 import { submitQuiz, type SubmittedQuizAnswer } from "@/lib/actions/study";
 import { generateChoices, shuffle, type Choice } from "@/lib/distractors";
 import {
+  isAnswerCorrect,
+  optionState,
+  summarizeAnswers,
+  toggleSelection,
+} from "@/lib/grading";
+import {
   answerEventId,
   answeredCount,
   clearDraft,
@@ -102,7 +108,7 @@ export function QuizFlow({
   // Running
   const [attemptId, setAttemptId] = useState("");
   const [items, setItems] = useState<QuizItem[]>([]);
-  const [answers, setAnswers] = useState<(string | null)[]>([]);
+  const [answers, setAnswers] = useState<string[][]>([]);
   const [revealedList, setRevealedList] = useState<boolean[]>([]);
   const [index, setIndex] = useState(0);
   const [startedAt, setStartedAt] = useState("");
@@ -181,6 +187,7 @@ export function QuizFlow({
           questionId: item.question.id,
           questionText: item.question.question_text,
           correctAnswer: item.question.correct_answer,
+          answerMode: item.question.answer_mode,
           choices: item.choices.map((choice) => ({ text: choice.text, isCorrect: choice.isCorrect })),
         })),
         answers,
@@ -228,7 +235,7 @@ export function QuizFlow({
     touchedActivity.current = false;
     setAttemptId(newAttemptId());
     setItems(built);
-    setAnswers(built.map(() => null));
+    setAnswers(built.map(() => []));
     setRevealedList(built.map(() => false));
     setIndex(0);
     setStartedAt(new Date().toISOString());
@@ -246,7 +253,7 @@ export function QuizFlow({
     const byId = new Map(questions.map((q) => [q.id, q]));
 
     const built: QuizItem[] = [];
-    const restoredAnswers: (string | null)[] = [];
+    const restoredAnswers: string[][] = [];
     const restoredRevealed: boolean[] = [];
     usable.items.forEach((item, i) => {
       const question = byId.get(item.questionId);
@@ -255,7 +262,7 @@ export function QuizFlow({
         question,
         choices: item.choices.map((choice) => ({ text: choice.text, isCorrect: choice.isCorrect })),
       });
-      restoredAnswers.push(usable.answers[i] ?? null);
+      restoredAnswers.push(usable.answers[i] ?? []);
       restoredRevealed.push(usable.revealed[i] ?? false);
     });
 
@@ -269,7 +276,7 @@ export function QuizFlow({
     setFeedback(usable.settings.feedback);
 
     submitted.current = false;
-    touchedActivity.current = restoredAnswers.some((a) => a !== null);
+    touchedActivity.current = restoredAnswers.some((a) => a.length > 0);
     setAttemptId(usable.attemptId);
     setItems(built);
     setAnswers(restoredAnswers);
@@ -300,22 +307,35 @@ export function QuizFlow({
 
   const total = items.length;
   const current = items[index];
-  const selected = answers[index] ?? null;
+  const selected = answers[index] ?? [];
   const revealed = revealedList[index] ?? false;
-  const unanswered = answers.filter((a) => a === null).length;
+  const unanswered = answers.filter((a) => a.length === 0).length;
   const isLast = index === total - 1;
+  const isMulti = current?.question.answer_mode === "multi";
 
+  const markActive = useCallback(() => {
+    if (touchedActivity.current) return;
+    touchedActivity.current = true;
+    // Activity only — this never touches mastery, which submitQuiz owns.
+    void touchStudyActivity(deckId, "quiz").catch(() => {});
+  }, [deckId]);
+
+  /**
+   * Record a pick. A single-answer question is locked as soon as it is
+   * answered in "after each question" mode; a multi-select one keeps
+   * collecting until Check answer, since a partial set is not yet an answer.
+   */
   const select = useCallback(
     (text: string) => {
-      // In "after each question" mode an answered question is locked.
-      if (feedback === "each" && answers[index] !== null) return;
+      if (revealedList[index]) return;
+      const multi = items[index]?.question.answer_mode === "multi";
 
       setAnswers((prev) => {
         const next = [...prev];
-        next[index] = text;
+        next[index] = toggleSelection(next[index] ?? [], text, multi);
         return next;
       });
-      if (feedback === "each") {
+      if (feedback === "each" && !multi) {
         setRevealedList((prev) => {
           const next = [...prev];
           next[index] = true;
@@ -323,14 +343,21 @@ export function QuizFlow({
         });
       }
 
-      if (!touchedActivity.current) {
-        touchedActivity.current = true;
-        // Activity only — this never touches mastery, which submitQuiz owns.
-        void touchStudyActivity(deckId, "quiz").catch(() => {});
-      }
+      markActive();
     },
-    [feedback, answers, index, deckId],
+    [feedback, revealedList, items, index, markActive],
   );
+
+  /** Commit a multi-select answer in "after each question" mode. */
+  const reveal = useCallback(() => {
+    if (revealedList[index] || (answers[index] ?? []).length === 0) return;
+    setRevealedList((prev) => {
+      const next = [...prev];
+      next[index] = true;
+      return next;
+    });
+    markActive();
+  }, [revealedList, answers, index, markActive]);
 
   const go = useCallback(
     (delta: number) =>
@@ -340,8 +367,7 @@ export function QuizFlow({
 
   const buildAnswers = (): SubmittedQuizAnswer[] =>
     items.map((item, i) => {
-      const answer = answers[i] ?? null;
-      const chosen = item.choices.find((choice) => choice.text === answer);
+      const answer = answers[i] ?? [];
       return {
         // Derived from the attempt, so resubmitting the same attempt replays
         // the same ids and mastery is applied exactly once.
@@ -350,8 +376,8 @@ export function QuizFlow({
         questionText: item.question.question_text,
         correctAnswer: item.question.correct_answer,
         explanation: item.question.explanation,
-        selectedAnswer: answer,
-        wasCorrect: chosen?.isCorrect ?? false,
+        selectedAnswer: answer.length > 0 ? summarizeAnswers(answer) : null,
+        wasCorrect: answer.length > 0 && isAnswerCorrect(item.choices, answer),
       };
     });
 
@@ -407,6 +433,19 @@ export function QuizFlow({
 
       const item = items[index];
       if (!item) return;
+
+      if (
+        item.question.answer_mode === "multi" &&
+        feedback === "each" &&
+        !revealedList[index] &&
+        (event.key === "Enter" || event.key === " ")
+      ) {
+        if ((answers[index] ?? []).length === 0) return;
+        event.preventDefault();
+        reveal();
+        return;
+      }
+
       const key = event.key.toUpperCase();
       const byNumber = /^[1-9]$/.test(key) ? Number(key) - 1 : -1;
       const byLetter = OPTION_LABELS.indexOf(key);
@@ -419,7 +458,7 @@ export function QuizFlow({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [stage, pending, items, index, go, select]);
+  }, [stage, pending, items, index, go, select, reveal, feedback, revealedList, answers]);
 
   // -------------------------------------------------------------------------
   // Settings
@@ -657,7 +696,7 @@ export function QuizFlow({
 
   if (!current) return null;
 
-  const selectedIsCorrect = current.choices.find((c) => c.text === selected)?.isCorrect ?? false;
+  const selectedIsCorrect = selected.length > 0 && isAnswerCorrect(current.choices, selected);
 
   return (
     <div className="space-y-6">
@@ -677,31 +716,32 @@ export function QuizFlow({
         </h1>
 
         <div className="space-y-3">
-          {current.choices.map((choice, i) => {
-            const isChosen = choice.text === selected;
-            const state = !revealed
-              ? isChosen
-                ? "selected"
-                : "idle"
-              : isChosen
-                ? choice.isCorrect
-                  ? "correct"
-                  : "incorrect"
-                : choice.isCorrect
-                  ? "missed"
-                  : "idle";
-            return (
-              <MCQOption
-                key={choice.text}
-                label={OPTION_LABELS[i] ?? String(i + 1)}
-                text={choice.text}
-                state={state}
-                disabled={revealed || pending}
-                onSelect={() => select(choice.text)}
-              />
-            );
-          })}
+          {current.choices.map((choice, i) => (
+            <MCQOption
+              key={choice.text}
+              label={OPTION_LABELS[i] ?? String(i + 1)}
+              text={choice.text}
+              state={optionState(choice, selected, revealed)}
+              disabled={revealed || pending}
+              onSelect={() => select(choice.text)}
+              multi={isMulti}
+            />
+          ))}
         </div>
+
+        {isMulti && !revealed ? (
+          <div className="flex flex-wrap items-center gap-3">
+            {feedback === "each" ? (
+              <Button onClick={reveal} disabled={selected.length === 0 || pending}>
+                Check answer
+              </Button>
+            ) : null}
+            <p className="text-sm text-muted">
+              Select all that apply — {current.choices.filter((c) => c.isCorrect).length} of{" "}
+              {current.choices.length} are correct.
+            </p>
+          </div>
+        ) : null}
 
         {revealed ? (
           <div
@@ -716,7 +756,7 @@ export function QuizFlow({
             <p>
               <span className="text-xs uppercase tracking-wide text-muted">Your answer</span>
               <br />
-              {selected}
+              {selected.length > 0 ? summarizeAnswers(selected) : "No answer"}
             </p>
             <p>
               <span className="text-xs uppercase tracking-wide text-muted">Correct answer</span>

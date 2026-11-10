@@ -56,6 +56,32 @@ export async function quickFixQuestion(
     if (!correctAnswer) return { error: "The correct answer cannot be blank." };
 
     const db = supabase();
+
+    // The quick fix rewrites the single stored correct choice. On a
+    // multi-select question that would collapse every correct option to the
+    // same text and destroy the answer set, so the answer is left to the full
+    // editor and only the wording is editable here.
+    const { data: existing, error: lookupError } = await db
+      .from("questions")
+      .select("answer_mode")
+      .eq("id", questionId)
+      .maybeSingle();
+    if (lookupError) throw new Error(lookupError.message);
+    if (!existing) return { error: "That question no longer exists." };
+
+    if (existing.answer_mode === "multi") {
+      const { error: textError } = await db
+        .from("questions")
+        .update({ question_text: questionText, topic: nullable(formData.get("topic")) })
+        .eq("id", questionId)
+        .eq("deck_id", deckId);
+      if (textError) throw new Error(textError.message);
+
+      revalidatePath(`/decks/${deckId}`);
+      revalidatePath(`/decks/${deckId}/edit`);
+      return { error: null, ok: true };
+    }
+
     const { error } = await db
       .from("questions")
       .update({

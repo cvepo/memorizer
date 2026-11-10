@@ -13,6 +13,10 @@ export type OptionState = "idle" | "selected" | "correct" | "incorrect" | "misse
  *   correct   — chosen and right
  *   incorrect — chosen and wrong
  *   missed    — not chosen, but this was the right answer
+ *
+ * `multi` switches the affordance to a checkbox: a square marker that stays
+ * lit while more options are picked, so it reads as "choose several" before
+ * the learner has read the stem.
  */
 export function MCQOption({
   label,
@@ -20,19 +24,24 @@ export function MCQOption({
   state,
   onSelect,
   disabled,
+  multi = false,
 }: {
   label: string;
   text: string;
   state: OptionState;
   onSelect?: () => void;
   disabled?: boolean;
+  multi?: boolean;
 }) {
+  const chosen = state === "selected" || state === "correct" || state === "incorrect";
   return (
     <button
       type="button"
       onClick={onSelect}
       disabled={disabled}
-      aria-pressed={state === "selected" || state === "correct" || state === "incorrect"}
+      role={multi ? "checkbox" : undefined}
+      aria-checked={multi ? chosen : undefined}
+      aria-pressed={multi ? undefined : chosen}
       className={cn(
         "flex w-full items-start gap-3 rounded-xl border px-4 py-3.5 text-left transition-colors duration-150",
         "min-h-14 disabled:cursor-default",
@@ -45,7 +54,8 @@ export function MCQOption({
     >
       <span
         className={cn(
-          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-xs font-semibold",
+          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center border text-xs font-semibold",
+          multi ? "rounded-[6px]" : "rounded-md",
           state === "idle" && "border-line-strong text-muted",
           state === "selected" && "border-transparent bg-accent text-accent-fg",
           state === "correct" && "border-transparent bg-success text-success-fg",
@@ -54,7 +64,13 @@ export function MCQOption({
         )}
         aria-hidden
       >
-        {state === "correct" || state === "missed" ? "✓" : state === "incorrect" ? "✕" : label}
+        {state === "correct" || state === "missed"
+          ? "✓"
+          : state === "incorrect"
+            ? "✕"
+            : state === "selected" && multi
+              ? "✓"
+              : label}
       </span>
       <span className="text-[15px] leading-snug">{text}</span>
     </button>

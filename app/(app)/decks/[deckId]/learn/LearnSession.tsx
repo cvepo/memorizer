@@ -4,7 +4,7 @@ import Link from "next/link";
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { KeyboardHints, type KeyHint } from "@/components/KeyboardHints";
-import { MCQOption, OPTION_LABELS, type OptionState } from "@/components/MCQOption";
+import { MCQOption, OPTION_LABELS } from "@/components/MCQOption";
 import { Mascot, type MascotState } from "@/components/Mascot";
 import { Slider } from "@/components/Slider";
 import { SaveStatus } from "@/components/SaveStatus";
@@ -33,11 +33,17 @@ import {
   type Counts,
   type LearnState,
 } from "@/lib/learnAlgorithm";
+import {
+  isAnswerCorrect,
+  optionState as gradeOptionState,
+  summarizeAnswers,
+  toggleSelection,
+} from "@/lib/grading";
 import type { StudyQuestion } from "@/lib/types";
 
 const KEY_TO_INDEX: Record<string, number | undefined> = {
-  "1": 0, "2": 1, "3": 2, "4": 3,
-  a: 0, b: 1, c: 2, d: 3,
+  "1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5,
+  a: 0, b: 1, c: 2, d: 3, e: 4, f: 5,
 };
 
 const AUTO_ADVANCE_MS = 700;
@@ -364,7 +370,7 @@ function LearnSessionView({
   const [state, setState] = useState<LearnState | null>(null);
 
   const [phase, setPhase] = useState<"answering" | "feedback" | "checkpoint" | "lap" | "done">("answering");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
   const [wasCorrect, setWasCorrect] = useState<boolean | null>(null);
   const [presentation, setPresentation] = useState(0);
   const [presented, setPresented] = useState<{ key: string; choices: Choice[] } | null>(null);
@@ -461,7 +467,7 @@ function LearnSessionView({
     });
     setState((previous) => (previous ? removeFromLearnPool(previous, questionId) : previous));
     setPhase("answering");
-    setSelected(null);
+    setSelected([]);
     setWasCorrect(null);
     setPresentation((n) => n + 1);
   }, []);
@@ -488,7 +494,7 @@ function LearnSessionView({
     });
     setState(removeFromLearnPool(state, currentId));
     setPhase("answering");
-    setSelected(null);
+    setSelected([]);
     setWasCorrect(null);
   }
   const question = currentId && byId.has(currentId) ? (byId.get(currentId) ?? null) : null;
@@ -505,6 +511,8 @@ function LearnSessionView({
   }, [presentationKey, currentId]);
 
   const choices = presented && presented.key === presentationKey ? presented.choices : null;
+  const isMulti = question?.answer_mode === "multi";
+  const correctCount = choices?.filter((choice) => choice.isCorrect).length ?? 0;
 
   const counts = useMemo(() => {
     const visible = questions.filter((question) => !excluded.has(question.id));
@@ -537,19 +545,37 @@ function LearnSessionView({
   );
 
   const grade = useCallback(
-    (choice: Choice) => {
-      if (phase !== "answering" || !question) return;
-      setSelected(choice.text);
-      setWasCorrect(choice.isCorrect);
+    (picks: string[]) => {
+      if (phase !== "answering" || !question || !choices || picks.length === 0) return;
+      const correct = isAnswerCorrect(choices, picks);
+      setSelected(picks);
+      setWasCorrect(correct);
       setPhase("feedback");
       // Returns immediately: the queue owns durability, the UI never waits.
       getQueue().enqueue({
         eventId: newEventId(),
         questionId: question.id,
-        wasCorrect: choice.isCorrect,
+        wasCorrect: correct,
       });
     },
-    [phase, question, getQueue],
+    [phase, question, choices, getQueue],
+  );
+
+  /**
+   * A single-answer question grades on the tap, which keeps Learn's rhythm.
+   * A multi-select one collects picks until the learner submits, because
+   * there is no way to know the set is finished until they say so.
+   */
+  const pick = useCallback(
+    (choice: Choice) => {
+      if (phase !== "answering") return;
+      if (!isMulti) {
+        grade([choice.text]);
+        return;
+      }
+      setSelected((current) => toggleSelection(current, choice.text, true));
+    },
+    [phase, isMulti, grade],
   );
 
   const advance = useCallback(() => {
@@ -572,7 +598,7 @@ function LearnSessionView({
     }
 
     setPresentation((n) => n + 1);
-    setSelected(null);
+    setSelected([]);
     setWasCorrect(null);
   }, [phase, question, wasCorrect, state, questions]);
 
@@ -589,7 +615,7 @@ function LearnSessionView({
         setState(createLearnState(fresh, checkpoint));
         setCheckpointCounts(null);
         setPhase("answering");
-        setSelected(null);
+        setSelected([]);
         setWasCorrect(null);
         setPresentation((n) => n + 1);
         setResetArmed(false);
@@ -605,7 +631,7 @@ function LearnSessionView({
     const pool = seedQuestions.filter((question) => !excluded.has(question.id));
     setState(createLearnState(pool, checkpoint));
     setPhase("answering");
-    setSelected(null);
+    setSelected([]);
     setWasCorrect(null);
     setCheckpointCounts(null);
     setPresentation((n) => n + 1);
@@ -644,17 +670,26 @@ function LearnSessionView({
 
       if (phase !== "answering") return;
 
+      // Enter submits the picks so far; without it a multi answer could only
+      // be sent with the mouse.
+      if (isMulti && (event.key === "Enter" || event.key === " ")) {
+        if (selected.length === 0) return;
+        event.preventDefault();
+        grade(selected);
+        return;
+      }
+
       const index = KEY_TO_INDEX[event.key.toLowerCase()];
       if (index === undefined) return;
       const choice = choices?.[index];
       if (!choice) return;
       event.preventDefault();
-      grade(choice);
+      pick(choice);
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [phase, choices, advance, grade]);
+  }, [phase, choices, advance, grade, pick, isMulti, selected]);
 
   const breadcrumb = (
     <div className="flex items-center justify-between gap-3">
@@ -900,12 +935,8 @@ function LearnSessionView({
     );
   }
 
-  const optionState = (choice: Choice): OptionState => {
-    if (phase === "answering") return "idle";
-    if (choice.text === selected) return choice.isCorrect ? "correct" : "incorrect";
-    if (choice.isCorrect) return "missed";
-    return "idle";
-  };
+  const optionState = (choice: Choice) =>
+    gradeOptionState(choice, selected, phase === "feedback");
 
   const mascotState: MascotState =
     phase !== "feedback"
@@ -1076,11 +1107,25 @@ function LearnSessionView({
               label={OPTION_LABELS[index] ?? String(index + 1)}
               text={choice.text}
               state={optionState(choice)}
-              onSelect={() => grade(choice)}
+              onSelect={() => pick(choice)}
               disabled={phase === "feedback"}
+              multi={isMulti}
             />
           ))}
         </div>
+
+        {isMulti && phase === "answering" ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onClick={() => grade(selected)} disabled={selected.length === 0}>
+              Check answer
+            </Button>
+            <p className="text-sm text-muted">
+              {correctCount > 0
+                ? `Select all that apply — ${correctCount} of ${choices?.length ?? 0} are correct.`
+                : "Select all that apply."}
+            </p>
+          </div>
+        ) : null}
 
         <div aria-live="polite">
           {phase === "feedback" && wasCorrect !== null ? (
@@ -1098,7 +1143,7 @@ function LearnSessionView({
                 <div className="mt-2 space-y-1 text-sm">
                   <p>
                     <span className="text-muted">Your answer: </span>
-                    {selected}
+                    {selected.length > 0 ? summarizeAnswers(selected) : "No answer"}
                   </p>
                   <p>
                     <span className="text-muted">Correct answer: </span>

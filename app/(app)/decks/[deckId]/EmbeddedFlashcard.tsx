@@ -80,7 +80,14 @@ export function EmbeddedFlashcard({
               </span>
               {choices && choices.length > 0 ? (
                 <span className="text-xs tracking-wide text-muted uppercase">
-                  Option {OPTION_LABELS[choices.findIndex((c) => c.isCorrect)] ?? "?"}
+                  {/* A multi-select answer spans several options, so name them
+                      all rather than only the first one found. */}
+                  Option
+                  {choices.length > 0 && choices.filter((c) => c.isCorrect).length > 1 ? "s " : " "}
+                  {choices
+                    .map((choice, index) => (choice.isCorrect ? OPTION_LABELS[index] : null))
+                    .filter(Boolean)
+                    .join(", ") || "?"}
                 </span>
               ) : null}
               {question.explanation ? (

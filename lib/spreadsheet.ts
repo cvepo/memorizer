@@ -1,5 +1,8 @@
 import * as XLSX from "xlsx";
 
+import { summarizeAnswers } from "@/lib/grading";
+import type { AnswerMode } from "@/lib/types";
+
 export type ColumnRole = "question" | "correctAnswer" | "choice" | "explanation" | "topic" | "ignore";
 
 export type ColumnMapping = {
@@ -23,7 +26,11 @@ export type ParsedRow = {
   /** 1-based row number in the original sheet, for error messages. */
   rowNumber: number;
   questionText: string;
+  /** Readable summary of the answer set; the single answer in single mode. */
   correctAnswer: string;
+  /** Every correct answer. One entry in single mode, several in multi. */
+  correctAnswers: string[];
+  answerMode: AnswerMode;
   distractors: string[];
   explanation: string;
   topic: string;
@@ -41,6 +48,7 @@ export type ImportSummary = {
   withImportedChoices: number;
   needGeneratedDistractors: number;
   duplicates: number;
+  multiSelect: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -228,6 +236,51 @@ function letterIndex(value: string): number | null {
   return match[1].toLowerCase().charCodeAt(0) - 97;
 }
 
+/** Stems that promise more than one answer, used to flag a suspect key. */
+const SELECT_ALL = /\b(select|choose|mark|pick)\s+(all|every|each)\b|\ball that apply\b|\bwhich\s+(two|three|four)\b/i;
+
+/**
+ * Read the answer-key cell, which may name one answer or several.
+ *
+ * Multiple answers are written either as choice letters ("A, C") or as the
+ * answer texts separated by a pipe or semicolon. A comma only splits when
+ * every part resolves to a letter or to a choice cell, because an ordinary
+ * prose answer — "Water availability, wildfires and heat" — contains commas
+ * of its own and must not be torn into three answers.
+ */
+function parseAnswerKey(cell: string, rawChoices: readonly string[]): string[] {
+  const resolve = (part: string): string | null => {
+    const trimmed = part.trim();
+    if (!trimmed) return null;
+    const index = letterIndex(trimmed);
+    if (index !== null && index < rawChoices.length) return rawChoices[index];
+    const match = rawChoices.find((choice) => normalize(choice) === normalize(trimmed));
+    return match ?? trimmed;
+  };
+
+  const unique = (parts: string[]) => [...new Map(parts.map((p) => [normalize(p), p])).values()];
+
+  const explicit = cell.split(/\s*[|;]\s*/).filter((part) => part.trim() !== "");
+  if (explicit.length > 1) {
+    return unique(explicit.map(resolve).filter((v): v is string => v !== null));
+  }
+
+  const commaParts = cell.split(/\s*,\s*/).filter((part) => part.trim() !== "");
+  if (commaParts.length > 1) {
+    const allResolvable = commaParts.every((part) => {
+      const index = letterIndex(part);
+      if (index !== null && index < rawChoices.length) return true;
+      return rawChoices.some((choice) => normalize(choice) === normalize(part));
+    });
+    if (allResolvable) {
+      return unique(commaParts.map(resolve).filter((v): v is string => v !== null));
+    }
+  }
+
+  const single = resolve(cell);
+  return single === null ? [] : [single];
+}
+
 export function buildRows(sheet: SheetData, mapping: ColumnMapping): ParsedRow[] {
   const seen = new Map<string, number>();
   const firstDataRowNumber = sheet.headerRowIndex + 2; // 1-based, header excluded
@@ -237,27 +290,51 @@ export function buildRows(sheet: SheetData, mapping: ColumnMapping): ParsedRow[]
     const issues: string[] = [];
 
     const questionText = mapping.question === null ? "" : (row[mapping.question] ?? "").trim();
-    const rawChoices = mapping.choices.map((index) => (row[index] ?? "").trim()).filter(Boolean);
-    let correctAnswer = mapping.correctAnswer === null ? "" : (row[mapping.correctAnswer] ?? "").trim();
+    // Positional, so a letter key still lines up when a choice cell is blank.
+    const choiceCells = mapping.choices.map((index) => (row[index] ?? "").trim());
+    const rawChoices = choiceCells.filter(Boolean);
+    const keyCell = mapping.correctAnswer === null ? "" : (row[mapping.correctAnswer] ?? "").trim();
 
-    // Answer keys are frequently a letter rather than the answer text.
-    const asLetter = letterIndex(correctAnswer);
-    if (asLetter !== null && mapping.choices.length > 0) {
-      const target = (row[mapping.choices[asLetter]] ?? "").trim();
-      if (target) correctAnswer = target;
-    }
+    const parsedAnswers = parseAnswerKey(keyCell, choiceCells);
+
+    // Sheets that encode a multi answer as "A; B; C" usually repeat that whole
+    // joined string as one of the choice cells. Split into its parts it is the
+    // correct set, so leaving it in the list would offer the answer twice —
+    // once as the options to find, once as a single giveaway option.
+    const correctKeys = new Set([...parsedAnswers.map(normalize), normalize(keyCell)]);
+    const multiDistractors = rawChoices.filter((choice) => !correctKeys.has(normalize(choice)));
+
+    // Splitting the key is only an improvement if the sheet also supplies
+    // something wrong to choose. Where it does not, every option would be
+    // correct, so keep the row as the single-answer question it imported as
+    // before rather than rejecting it — with the reason shown in the preview.
+    const degraded = parsedAnswers.length > 1 && multiDistractors.length === 0;
+    const answerMode: AnswerMode = parsedAnswers.length > 1 && !degraded ? "multi" : "single";
+    const correctAnswers = degraded ? [keyCell] : parsedAnswers;
+    const correctAnswer = summarizeAnswers(correctAnswers);
 
     if (!questionText) issues.push("Question is blank");
-    if (!correctAnswer) issues.push("Correct answer is blank");
+    if (correctAnswers.length === 0) issues.push("Correct answer is blank");
 
-    const distractors = rawChoices.filter((choice) => normalize(choice) !== normalize(correctAnswer));
+    const distractors =
+      answerMode === "multi"
+        ? multiDistractors
+        : rawChoices.filter((choice) => normalize(choice) !== normalize(correctAnswer));
     const hasImportedChoices = distractors.length > 0;
 
-    if (rawChoices.length > 0 && !hasImportedChoices && correctAnswer) {
+    if (degraded) {
+      issues.push("Several answers keyed but no wrong ones — imported as a single answer");
+    }
+    if (rawChoices.length > 0 && !hasImportedChoices && correctAnswers.length > 0) {
       issues.push("Every imported choice matches the correct answer");
     }
-    if (!hasImportedChoices && correctAnswer) {
+    if (!hasImportedChoices && correctAnswers.length > 0) {
       issues.push("No wrong choices — distractors will be generated");
+    }
+    // A stem promising several answers next to a one-answer key is the shape
+    // a miskeyed select-all import takes, and it grades as wrong every time.
+    if (answerMode === "single" && !degraded && SELECT_ALL.test(questionText)) {
+      issues.push("Stem asks for several answers but only one is keyed");
     }
     if (mapping.topic !== null && !(row[mapping.topic] ?? "").trim()) {
       issues.push("Missing topic");
@@ -272,10 +349,15 @@ export function buildRows(sheet: SheetData, mapping: ColumnMapping): ParsedRow[]
       rowNumber,
       questionText,
       correctAnswer,
+      correctAnswers,
+      answerMode,
       distractors,
       explanation: mapping.explanation === null ? "" : (row[mapping.explanation] ?? "").trim(),
       topic: mapping.topic === null ? "" : (row[mapping.topic] ?? "").trim(),
-      valid: Boolean(questionText) && Boolean(correctAnswer),
+      // Multi-select cannot fall back to generated distractors, but a row that
+      // would have none has already degraded to single above, so a question
+      // and an answer are all a row needs — as before.
+      valid: Boolean(questionText) && correctAnswers.length > 0,
       issues,
       duplicateOf,
       hasImportedChoices,
@@ -292,5 +374,6 @@ export function summarize(rows: readonly ParsedRow[]): ImportSummary {
     withImportedChoices: valid.filter((row) => row.hasImportedChoices).length,
     needGeneratedDistractors: valid.filter((row) => !row.hasImportedChoices).length,
     duplicates: rows.filter((row) => row.duplicateOf !== null).length,
+    multiSelect: valid.filter((row) => row.answerMode === "multi").length,
   };
 }

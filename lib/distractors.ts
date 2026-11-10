@@ -15,6 +15,12 @@ export function shuffle<T>(input: readonly T[]): T[] {
   return out;
 }
 
+/**
+ * Multi-select questions often need more than the four options a single-answer
+ * question gets. Capped at the number of keyboard labels in MCQOption.
+ */
+export const MAX_MULTI_CHOICES = 6;
+
 const normalize = (value: string) => value.trim().toLowerCase();
 
 /** Case-insensitive dedupe that keeps the first spelling seen. */
@@ -67,6 +73,18 @@ export function generateChoices(
   deckQuestions: readonly StudyQuestion[],
   maxChoices = 4,
 ): Choice[] {
+  // A multi-select question is only answerable against the exact option set it
+  // was written with: borrowing an answer from elsewhere in the deck could
+  // silently add a second true statement, and trimming the list could drop one
+  // of the answers the learner is meant to find. Use the stored choices whole.
+  if (question.answer_mode === "multi") {
+    return shuffle(
+      question.choices
+        .map((choice) => ({ text: choice.answer_text.trim(), isCorrect: choice.is_correct }))
+        .filter((choice) => choice.text !== ""),
+    ).slice(0, MAX_MULTI_CHOICES);
+  }
+
   const correct = question.correct_answer.trim();
 
   const importedDistractors = uniqueBy(
@@ -112,6 +130,10 @@ export function maxAvailableChoices(
   question: StudyQuestion,
   deckQuestions: readonly StudyQuestion[],
 ): number {
+  if (question.answer_mode === "multi") {
+    return Math.min(MAX_MULTI_CHOICES, question.choices.length);
+  }
+
   const correct = question.correct_answer.trim();
   const imported = uniqueBy(
     question.choices.filter((c) => !c.is_correct).map((c) => c.answer_text),

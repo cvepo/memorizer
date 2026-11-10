@@ -4,10 +4,15 @@ import { revalidatePath } from "next/cache";
 
 import { requireAdmin } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import type { AnswerMode } from "@/lib/types";
 
 export type ImportQuestion = {
   questionText: string;
+  /** Readable summary; equals the single answer in single mode. */
   correctAnswer: string;
+  /** Every correct answer. One entry in single mode, several in multi. */
+  correctAnswers: string[];
+  answerMode: AnswerMode;
   distractors: string[];
   explanation: string | null;
   topic: string | null;
@@ -98,6 +103,7 @@ export async function importQuestions(
       deck_id: deckId,
       question_text: question.questionText,
       correct_answer: question.correctAnswer,
+      answer_mode: question.answerMode,
       explanation: question.explanation,
       topic: question.topic,
       position: position++,
@@ -109,12 +115,16 @@ export async function importQuestions(
 
     const choices = (rows ?? []).flatMap((row, index) => {
       const source = batch[index];
+      const correct = source.correctAnswers.map((a) => a.trim()).filter(Boolean);
+      const taken = new Set(correct.map((a) => a.toLowerCase()));
       const unique = [...new Set(source.distractors.map((d) => d.trim()).filter(Boolean))].filter(
-        (d) => d.toLowerCase() !== source.correctAnswer.trim().toLowerCase(),
+        (d) => !taken.has(d.toLowerCase()),
       );
-      if (unique.length === 0) return [];
+      // A multi-select question is unanswerable from generated distractors, so
+      // its options are always stored even if the sheet gave no wrong answers.
+      if (unique.length === 0 && source.answerMode === "single") return [];
       return [
-        { question_id: row.id, answer_text: source.correctAnswer, is_correct: true },
+        ...correct.map((answer_text) => ({ question_id: row.id, answer_text, is_correct: true })),
         ...unique.map((answer_text) => ({ question_id: row.id, answer_text, is_correct: false })),
       ];
     });

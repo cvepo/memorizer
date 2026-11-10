@@ -84,6 +84,14 @@ export function Importer({ courses, decks }: { courses: Course[]; decks: DeckWit
 
   const invalidRows = useMemo(() => rows.filter((row) => !row.valid).slice(0, 10), [rows]);
   const duplicateRows = useMemo(() => rows.filter((row) => row.duplicateOf !== null), [rows]);
+  const multiRows = useMemo(
+    () => rows.filter((row) => row.valid && row.answerMode === "multi"),
+    [rows],
+  );
+  const degradedRows = useMemo(
+    () => rows.filter((row) => row.issues.some((issue) => issue.startsWith("Several answers keyed"))),
+    [rows],
+  );
 
   const detected = useMemo(() => {
     if (!sheet || !mapping) return [];
@@ -173,6 +181,8 @@ export function Importer({ courses, decks }: { courses: Course[]; decks: DeckWit
     const questions: ImportQuestion[] = selectedRows.map((row) => ({
       questionText: row.questionText,
       correctAnswer: row.correctAnswer,
+      correctAnswers: row.correctAnswers,
+      answerMode: row.answerMode,
       distractors: row.distractors,
       explanation: row.explanation || null,
       topic: row.topic || null,
@@ -441,6 +451,9 @@ export function Importer({ courses, decks }: { courses: Course[]; decks: DeckWit
               <Stat value={summary.totalRows} label="questions detected" />
               <Stat value={summary.withImportedChoices} label="have complete answer choices" tone="success" />
               <Stat value={summary.needGeneratedDistractors} label="require automatic distractors" tone="accent" />
+              {summary.multiSelect > 0 ? (
+                <Stat value={summary.multiSelect} label="are select-all-that-apply" tone="accent" />
+              ) : null}
               {summary.invalid > 0 ? (
                 <div>
                   <p className="text-xl font-semibold tabular-nums text-danger">{summary.invalid}</p>
@@ -459,6 +472,47 @@ export function Importer({ courses, decks }: { courses: Course[]; decks: DeckWit
                 {invalidRows.map((row) => (
                   <li key={row.rowNumber}>
                     Row {row.rowNumber}: {blockingIssues(row).join(", ")}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {multiRows.length > 0 ? (
+            <div className="tint-accent space-y-2 rounded-2xl border p-4 text-sm">
+              <p className="font-medium">
+                {multiRows.length} select-all-that-apply{" "}
+                {multiRows.length === 1 ? "question" : "questions"}
+              </p>
+              <p className="text-muted">
+                The answer key named more than one answer, so these will be graded on the whole
+                set — every correct option has to be picked and no wrong one.
+              </p>
+              <ul className="space-y-1 text-muted">
+                {multiRows.slice(0, 5).map((row) => (
+                  <li key={row.rowNumber} className="truncate">
+                    Row {row.rowNumber}: {row.correctAnswers.length} correct of{" "}
+                    {row.correctAnswers.length + row.distractors.length} — {row.questionText}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {degradedRows.length > 0 ? (
+            <div className="space-y-2 rounded-2xl border border-line p-4 text-sm">
+              <p className="font-medium">
+                {degradedRows.length} stayed single-answer
+              </p>
+              <p className="text-muted">
+                The key named several answers but the sheet has no wrong ones to go with them,
+                which would leave every option correct. These import unchanged; add wrong answers
+                in the sheet to turn them into select-all questions.
+              </p>
+              <ul className="space-y-1 text-muted">
+                {degradedRows.slice(0, 5).map((row) => (
+                  <li key={row.rowNumber} className="truncate">
+                    Row {row.rowNumber}: {row.questionText}
                   </li>
                 ))}
               </ul>

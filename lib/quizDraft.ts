@@ -16,7 +16,10 @@
  * absent, because a broken draft must never be able to break the quiz page.
  */
 
-export const QUIZ_DRAFT_VERSION = 2;
+// 3: answers became a list of picks per question, for multi-select.
+export const QUIZ_DRAFT_VERSION = 3;
+
+import type { AnswerMode } from "@/lib/types";
 
 const KEY_PREFIX = "memorizer-quiz-draft:";
 
@@ -39,6 +42,7 @@ export type QuizDraftItem = {
   /** Kept so a later edit to the question can be detected, not to render. */
   questionText: string;
   correctAnswer: string;
+  answerMode: AnswerMode;
   choices: { text: string; isCorrect: boolean }[];
 };
 
@@ -49,8 +53,11 @@ export type QuizDraft = {
   attemptId: string;
   /** Selected questions in display order. */
   items: QuizDraftItem[];
-  /** Selected answer text per item, index-aligned with `items`. */
-  answers: (string | null)[];
+  /**
+   * Chosen option texts per item, index-aligned with `items`. An empty list
+   * means unanswered; a single-answer question never holds more than one.
+   */
+  answers: string[][];
   /** Whether each item has already shown its feedback. */
   revealed: boolean[];
   index: number;
@@ -142,6 +149,9 @@ function parseItem(value: unknown): QuizDraftItem | null {
   if (!isString(raw.questionId) || !isString(raw.questionText) || !isString(raw.correctAnswer)) {
     return null;
   }
+  // Drafts are written by this same build, but a hand-edited or truncated one
+  // must read as absent rather than resume as the wrong kind of question.
+  if (raw.answerMode !== "single" && raw.answerMode !== "multi") return null;
   if (!Array.isArray(raw.choices) || raw.choices.length === 0) return null;
 
   const choices: { text: string; isCorrect: boolean }[] = [];
@@ -156,6 +166,7 @@ function parseItem(value: unknown): QuizDraftItem | null {
     questionId: raw.questionId,
     questionText: raw.questionText,
     correctAnswer: raw.correctAnswer,
+    answerMode: raw.answerMode,
     choices,
   };
 }
@@ -181,8 +192,8 @@ function parseDraft(value: unknown, profileId: string, deckId: string): QuizDraf
   }
 
   if (!Array.isArray(raw.answers) || raw.answers.length !== items.length) return null;
-  if (!raw.answers.every((a) => a === null || isString(a))) return null;
-  const answers = raw.answers as (string | null)[];
+  if (!raw.answers.every((a) => Array.isArray(a) && a.every(isString))) return null;
+  const answers = (raw.answers as string[][]).map((picks) => [...picks]);
 
   if (!Array.isArray(raw.revealed) || raw.revealed.length !== items.length) return null;
   if (!raw.revealed.every((r) => typeof r === "boolean")) return null;
@@ -303,7 +314,7 @@ export function validateDraft(
 export function pruneDraft(draft: QuizDraft, conflict: DraftConflict): QuizDraft {
   const keep = new Set(conflict.valid);
   const items: QuizDraftItem[] = [];
-  const answers: (string | null)[] = [];
+  const answers: string[][] = [];
   const revealed: boolean[] = [];
   let keptBeforeIndex = 0;
 
@@ -311,7 +322,7 @@ export function pruneDraft(draft: QuizDraft, conflict: DraftConflict): QuizDraft
     if (!keep.has(item.questionId)) return;
     if (i < draft.index) keptBeforeIndex += 1;
     items.push(item);
-    answers.push(draft.answers[i] ?? null);
+    answers.push(draft.answers[i] ?? []);
     revealed.push(draft.revealed[i] ?? false);
   });
 

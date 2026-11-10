@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { requireAdmin } from "@/lib/auth";
+import { summarizeAnswers } from "@/lib/grading";
 import { supabase } from "@/lib/supabase";
+import type { AnswerMode } from "@/lib/types";
 import type { Deck } from "@/lib/types";
 
 export type ActionState = { error: string | null; ok?: boolean };
@@ -143,7 +145,9 @@ export type QuestionInput = {
   id?: string;
   deckId: string;
   questionText: string;
-  correctAnswer: string;
+  /** Every correct answer. One entry in single mode, several in multi. */
+  correctAnswers: string[];
+  answerMode: AnswerMode;
   distractors: string[];
   explanation: string | null;
   topic: string | null;
@@ -155,7 +159,11 @@ function readQuestionForm(formData: FormData): QuestionInput {
     id: text(formData.get("id")) || undefined,
     deckId: text(formData.get("deck_id")),
     questionText: text(formData.get("question_text")),
-    correctAnswer: text(formData.get("correct_answer")),
+    answerMode: text(formData.get("answer_mode")) === "multi" ? "multi" : "single",
+    correctAnswers: formData
+      .getAll("correct_answer")
+      .map((value) => text(value))
+      .filter(Boolean),
     distractors: formData
       .getAll("distractor")
       .map((value) => text(value))
@@ -166,23 +174,31 @@ function readQuestionForm(formData: FormData): QuestionInput {
 }
 
 /**
- * Replace a question's stored wrong answers. The correct answer is stored on
- * the question row and also mirrored into answer_choices (is_correct = true)
- * only when explicit distractors exist, so a question with no stored choices
- * stays a "generate distractors at runtime" question.
+ * Replace a question's stored choices. In single mode the correct answer lives
+ * on the question row and is only mirrored here when explicit distractors
+ * exist, so a question with no stored choices stays a "generate distractors at
+ * runtime" question. A multi-select question always stores its full option
+ * set, because its answer cannot be reconstructed from one string.
  */
-async function writeChoices(questionId: string, correctAnswer: string, distractors: string[]) {
+async function writeChoices(
+  questionId: string,
+  correctAnswers: string[],
+  distractors: string[],
+  answerMode: AnswerMode,
+) {
   const db = supabase();
   const { error: deleteError } = await db.from("answer_choices").delete().eq("question_id", questionId);
   if (deleteError) throw new Error(deleteError.message);
 
+  const correct = [...new Set(correctAnswers.map((a) => a.trim()).filter(Boolean))];
+  const taken = new Set(correct.map((a) => a.toLowerCase()));
   const unique = [...new Set(distractors.map((d) => d.trim()).filter(Boolean))].filter(
-    (d) => d.toLowerCase() !== correctAnswer.trim().toLowerCase(),
+    (d) => !taken.has(d.toLowerCase()),
   );
-  if (unique.length === 0) return;
+  if (unique.length === 0 && answerMode === "single") return;
 
   const { error } = await db.from("answer_choices").insert([
-    { question_id: questionId, answer_text: correctAnswer, is_correct: true },
+    ...correct.map((answer_text) => ({ question_id: questionId, answer_text, is_correct: true })),
     ...unique.map((answer_text) => ({ question_id: questionId, answer_text, is_correct: false })),
   ]);
   if (error) throw new Error(error.message);
@@ -194,7 +210,22 @@ export async function saveQuestion(_prev: ActionState, formData: FormData): Prom
     const input = readQuestionForm(formData);
     if (!input.deckId) return { error: "Missing deck." };
     if (!input.questionText) return { error: "The question cannot be blank." };
-    if (!input.correctAnswer) return { error: "The correct answer cannot be blank." };
+    if (input.correctAnswers.length === 0) {
+      return { error: "The correct answer cannot be blank." };
+    }
+    if (input.answerMode === "multi") {
+      if (input.correctAnswers.length < 2) {
+        return { error: "A select-all question needs at least two correct answers." };
+      }
+      if (input.distractors.filter(Boolean).length === 0) {
+        return { error: "A select-all question needs at least one wrong answer." };
+      }
+    }
+
+    const correctAnswer =
+      input.answerMode === "multi"
+        ? summarizeAnswers(input.correctAnswers)
+        : input.correctAnswers[0];
 
     const db = supabase();
     let questionId = input.id;
@@ -204,7 +235,8 @@ export async function saveQuestion(_prev: ActionState, formData: FormData): Prom
         .from("questions")
         .update({
           question_text: input.questionText,
-          correct_answer: input.correctAnswer,
+          correct_answer: correctAnswer,
+          answer_mode: input.answerMode,
           explanation: input.explanation,
           topic: input.topic,
         })
@@ -224,7 +256,8 @@ export async function saveQuestion(_prev: ActionState, formData: FormData): Prom
         .insert({
           deck_id: input.deckId,
           question_text: input.questionText,
-          correct_answer: input.correctAnswer,
+          correct_answer: correctAnswer,
+          answer_mode: input.answerMode,
           explanation: input.explanation,
           topic: input.topic,
           position: (last?.position ?? -1) + 1,
@@ -235,7 +268,7 @@ export async function saveQuestion(_prev: ActionState, formData: FormData): Prom
       questionId = data.id;
     }
 
-    await writeChoices(questionId, input.correctAnswer, input.distractors);
+    await writeChoices(questionId, input.correctAnswers, input.distractors, input.answerMode);
 
     revalidatePath(`/decks/${input.deckId}/edit`);
     revalidatePath(`/decks/${input.deckId}`);
