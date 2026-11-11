@@ -248,7 +248,10 @@ const SELECT_ALL = /\b(select|choose|mark|pick)\s+(all|every|each)\b|\ball that 
  * prose answer — "Water availability, wildfires and heat" — contains commas
  * of its own and must not be torn into three answers.
  */
-function parseAnswerKey(cell: string, rawChoices: readonly string[]): string[] {
+function parseAnswerKey(
+  cell: string,
+  rawChoices: readonly string[],
+): { answers: string[]; byLetter: boolean } {
   const resolve = (part: string): string | null => {
     const trimmed = part.trim();
     if (!trimmed) return null;
@@ -269,25 +272,28 @@ function parseAnswerKey(cell: string, rawChoices: readonly string[]): string[] {
     ).values(),
   ];
 
+  const isLetter = (part: string) => {
+    const index = letterIndex(part);
+    return index !== null && index < rawChoices.length;
+  };
+
   const explicit = cell.split(/\s*[|;]\s*/).filter((part) => part.trim() !== "");
   if (explicit.length > 1) {
-    return unique(explicit.map(resolve));
+    return { answers: unique(explicit.map(resolve)), byLetter: explicit.every(isLetter) };
   }
 
   const commaParts = cell.split(/\s*,\s*/).filter((part) => part.trim() !== "");
   if (commaParts.length > 1) {
-    const allResolvable = commaParts.every((part) => {
-      const index = letterIndex(part);
-      if (index !== null && index < rawChoices.length) return true;
-      return rawChoices.some((choice) => normalize(choice) === normalize(part));
-    });
+    const allResolvable = commaParts.every(
+      (part) => isLetter(part) || rawChoices.some((choice) => normalize(choice) === normalize(part)),
+    );
     if (allResolvable) {
-      return unique(commaParts.map(resolve));
+      return { answers: unique(commaParts.map(resolve)), byLetter: commaParts.every(isLetter) };
     }
   }
 
   const single = resolve(cell);
-  return single === null ? [] : [single];
+  return { answers: single === null ? [] : [single], byLetter: isLetter(cell) };
 }
 
 export function buildRows(sheet: SheetData, mapping: ColumnMapping): ParsedRow[] {
@@ -304,7 +310,7 @@ export function buildRows(sheet: SheetData, mapping: ColumnMapping): ParsedRow[]
     const rawChoices = choiceCells.filter(Boolean);
     const keyCell = mapping.correctAnswer === null ? "" : (row[mapping.correctAnswer] ?? "").trim();
 
-    const parsedAnswers = parseAnswerKey(keyCell, choiceCells);
+    const { answers: parsedAnswers, byLetter } = parseAnswerKey(keyCell, choiceCells);
 
     // Sheets that encode a multi answer as "A; B; C" usually repeat that whole
     // joined string as one of the choice cells. Split into its parts it is the
@@ -315,15 +321,22 @@ export function buildRows(sheet: SheetData, mapping: ColumnMapping): ParsedRow[]
 
     // Splitting the key is only an improvement if the sheet also supplies
     // something wrong to choose. Where it does not, every option would be
-    // correct, so keep the row as the single-answer question it imported as
-    // before rather than rejecting it — with the reason shown in the preview.
+    // correct. A key written out in full can still fall back to its own text
+    // as a single answer, which is how such a row imported before. A key
+    // written as letters cannot: "A, B, C, D" is not an answer, so the row
+    // has to be fixed in the sheet rather than quietly imported as nonsense.
     const degraded = parsedAnswers.length > 1 && multiDistractors.length === 0;
+    const unsalvageable = degraded && byLetter;
     const answerMode: AnswerMode = parsedAnswers.length > 1 && !degraded ? "multi" : "single";
-    const correctAnswers = degraded ? [keyCell] : parsedAnswers;
+    const correctAnswers = unsalvageable ? [] : degraded ? [keyCell] : parsedAnswers;
     const correctAnswer = summarizeAnswers(correctAnswers);
 
     if (!questionText) issues.push("Question is blank");
-    if (correctAnswers.length === 0) issues.push("Correct answer is blank");
+    if (unsalvageable) {
+      issues.push("Every choice is keyed correct — add a wrong answer to make it select-all");
+    } else if (correctAnswers.length === 0) {
+      issues.push("Correct answer is blank");
+    }
 
     const distractors =
       answerMode === "multi"
@@ -331,7 +344,7 @@ export function buildRows(sheet: SheetData, mapping: ColumnMapping): ParsedRow[]
         : rawChoices.filter((choice) => normalize(choice) !== normalize(correctAnswer));
     const hasImportedChoices = distractors.length > 0;
 
-    if (degraded) {
+    if (degraded && !unsalvageable) {
       issues.push("Several answers keyed but no wrong ones — imported as a single answer");
     }
     if (rawChoices.length > 0 && !hasImportedChoices && correctAnswers.length > 0) {

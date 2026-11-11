@@ -60,6 +60,14 @@ ok("summary counts multi-select rows", s.multiSelect === 1 && s.valid === 2, JSO
 r = parse([H, ["Q11", "Filtration", "Chlorination", "", "Freezing", "A, C"]]).rows[0];
 ok("letter pointing at a blank cell is dropped", r.answerMode === "single" && r.correctAnswers.join("|") === "Filtration", JSON.stringify(r.correctAnswers));
 
+// "A, B, C, D" against exactly four choices leaves nothing wrong to pick, and
+// the key itself is not answer text, so the row must be rejected, not imported
+// with the literal string "A, B, C, D" as its answer.
+r = parse([H, ["Q12", "Alpha", "Beta", "Gamma", "Delta", "A, B, C, D"]]).rows[0];
+ok("all-letters key with no wrong answer is rejected", !r.valid, JSON.stringify({ m: r.answerMode, c: r.correctAnswers, i: r.issues }));
+ok("rejection says how to fix it", r.issues.some(i => /add a wrong answer/.test(i)), r.issues.join("; "));
+ok("literal letter key never becomes the answer", r.correctAnswer !== "A, B, C, D", r.correctAnswer);
+
 console.log("\n== grading ==");
 const choices = [
   { text: "Filtration", isCorrect: true },
