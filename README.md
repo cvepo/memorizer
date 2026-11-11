@@ -177,7 +177,7 @@ tradeoff is the point of the design, not an oversight.
 
 ## Importing spreadsheets
 
-`.csv` and `.xlsx`. Columns are detected rather than required in an exact order. All three of
+`.csv` and `.xlsx`. Columns are detected rather than required in an exact order. All four of
 these work out of the box (see [`samples/`](samples)):
 
 **Full** — wrong answers are used as written:
@@ -194,6 +194,28 @@ these work out of the box (see [`samples/`](samples)):
 
 | Prompt | Option A | Option B | Option C | Option D | Correct | Rationale | Chapter |
 |---|---|---|---|---|---|---|---|
+
+**Select all that apply** — a key naming more than one answer makes the question multi-select.
+Mix these freely with ordinary rows in one sheet; the mode is decided per row, not per file.
+
+| Correct Answer | Reads as |
+|---|---|
+| `B` | one answer — ordinary question |
+| `Sporangium` | one answer, written out |
+| `A, B` | two answers, by letter |
+| `Influenza\|SARS-CoV-2` | two answers, written out |
+| `Mycotoxins; Penicillin; Ethanol` | three answers, written out |
+| `Water availability, wildfires and heat` | **one** answer that contains commas |
+
+A comma only separates answers when every part is a choice letter or matches a choice cell
+exactly, so an answer with commas of its own stays whole. Use `|` or `;` when in doubt — those
+always separate. Up to six options per question.
+
+A select-all question needs at least one wrong choice in the sheet: its options cannot be
+generated, because a borrowed answer might be a second true statement. If a key names several
+answers but the row has no wrong ones, the question imports as a single answer and the preview
+says why. Don't also repeat the joined key (`A; B`) as a choice cell — it is dropped rather than
+offered as a giveaway option.
 
 Recognised header variations include `Question`/`Prompt`/`Question Text`/`Term`,
 `Answer`/`Correct Answer`/`Correct`/`Solution`/`Key`, `Choice A`/`Option A`/`Answer A`/`A`,
