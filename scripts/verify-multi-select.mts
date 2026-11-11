@@ -56,6 +56,10 @@ const s = summarize(parse([H,
 ]).rows);
 ok("summary counts multi-select rows", s.multiSelect === 1 && s.valid === 2, JSON.stringify(s));
 
+// Letters are positional, so a blank column must not become a phantom answer.
+r = parse([H, ["Q11", "Filtration", "Chlorination", "", "Freezing", "A, C"]]).rows[0];
+ok("letter pointing at a blank cell is dropped", r.answerMode === "single" && r.correctAnswers.join("|") === "Filtration", JSON.stringify(r.correctAnswers));
+
 console.log("\n== grading ==");
 const choices = [
   { text: "Filtration", isCorrect: true },

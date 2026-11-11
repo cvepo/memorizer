@@ -258,11 +258,20 @@ function parseAnswerKey(cell: string, rawChoices: readonly string[]): string[] {
     return match ?? trimmed;
   };
 
-  const unique = (parts: string[]) => [...new Map(parts.map((p) => [normalize(p), p])).values()];
+  // A letter may point at a blank choice cell, which resolves to nothing and
+  // must not count towards the answer set — otherwise "A, E" with an empty
+  // column E would read as a two-answer question with one real answer.
+  const unique = (parts: (string | null)[]) => [
+    ...new Map(
+      parts
+        .filter((p): p is string => p !== null && p.trim() !== "")
+        .map((p) => [normalize(p), p]),
+    ).values(),
+  ];
 
   const explicit = cell.split(/\s*[|;]\s*/).filter((part) => part.trim() !== "");
   if (explicit.length > 1) {
-    return unique(explicit.map(resolve).filter((v): v is string => v !== null));
+    return unique(explicit.map(resolve));
   }
 
   const commaParts = cell.split(/\s*,\s*/).filter((part) => part.trim() !== "");
@@ -273,7 +282,7 @@ function parseAnswerKey(cell: string, rawChoices: readonly string[]): string[] {
       return rawChoices.some((choice) => normalize(choice) === normalize(part));
     });
     if (allResolvable) {
-      return unique(commaParts.map(resolve).filter((v): v is string => v !== null));
+      return unique(commaParts.map(resolve));
     }
   }
 
